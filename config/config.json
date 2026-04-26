@@ -1,0 +1,49 @@
+{
+  "gk": {
+    "host":     "<gk_host>",
+    "port":     1719,
+    "alias":    "<alias-1>",
+    "e164":     "<alias-1>",
+    "ttl":      60,
+    "username": "",
+    "password": ""
+  },
+  "recorder": {
+    "output_dir":        "/opt/recorder/recordings",
+    "video_width":       1920,
+    "video_height":      1080,
+    "video_fps":         30,
+    "audio_sample_rate": 16000,
+    "audio_channels":    1,
+    "video_codec":       "libx264",
+    "audio_codec":       "aac",
+    "video_bitrate":     2000000,
+    "audio_bitrate":     64000,
+    "rtp_port_base":     20000
+  },
+  "outgoing": {
+    "enabled":           false,
+    "dial_number":       "<dial-number>",
+    "mcu_host":          "",
+    "reconnect":         true,
+    "reconnect_delay_s": 10,
+    "max_reconnects":    -1
+  },
+  "tcp": {
+    "bind_addr": "0.0.0.0",
+    "port":      9001
+  },
+  "streaming": {
+    "enabled":             true,
+    "rtmp_server":         "rtmp://127.0.0.1/live",
+    "main_key_tpl":        "recorder-main",
+    "aux_key_tpl":         "recorder-aux",
+    "push_aux":            true,
+    "queue_max":           200,
+    "reconnect_delay_ms":  2000
+  },
+  "auto_send_video": false,
+  "terminal_id": "TE录播设备",
+  "log_dir":   "/opt/recorder/logs",
+  "log_level": "info"
+}

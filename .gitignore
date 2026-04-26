@@ -1,0 +1,25 @@
+# 编译产物
+build/
+bin/
+*.obj
+*.o
+*.lib
+*.dll
+*.a
+*.exe
+*.pdb
+
+# 运行产生的日志和媒体文件
+logs/
+recordings/
+*.log
+*.pcap
+*.pcapng
+
+# IDE和系统文件
+.vs/
+.vscode/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
