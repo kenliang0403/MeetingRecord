@@ -1,5 +1,5 @@
 #!/bin/bash
-export RECORDER_102_PASSWORD=""
+source "$(dirname "export RECORDER_102_PASSWORD=""")/load_env.sh"
 export SSH_ASKPASS="D:/MeetingRecord/recorder-core/scripts/askpass.cmd"
 export DISPLAY="dummy:0"
 

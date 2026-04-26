@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $server = "ftadmin@<recorder_host>"
 $remoteBase = "/opt/recorder"
 
-$env:RECORDER_102_PASSWORD = ""
+. "$PSScriptRoot\load_env.ps1"
 $env:SSH_ASKPASS = (Join-Path $PSScriptRoot "askpass.cmd")
 $env:SSH_ASKPASS_REQUIRE = "force"
 $env:DISPLAY = "1"
