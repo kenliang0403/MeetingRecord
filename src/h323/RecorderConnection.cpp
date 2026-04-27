@@ -815,27 +815,77 @@ void RecorderConnection::OnCapRefreshTimer(PTimer&, INT)
     }
 
     int attempt = capRefreshRetries_.fetch_add(1) + 1;
-    spdlog::info("RecorderConnection: H.239 subscribe attempt {} — re-sending TCS to nudge MCU", attempt);
+    spdlog::info("RecorderConnection: H.239 subscribe attempt {} — sending raw OLC extendedVideoCapability session=10", attempt);
 
-    // ── Strategy: re-send TerminalCapabilitySet (TCS) ─────────────────
+    // ── Strategy: bypass H323Plus::OpenLogicalChannel() entirely ──────
     //
-    // 之前用 raw OLC(forward, extendedVideoCapability, session=10) 触发的副作用：
-    // VP9660 把我们当作演示发送方（"会场发送=是"），即使我们没真的推流。
-    // 改用 SendCapabilitySet(FALSE) 重发 TCS——我们的 capability 表里已声明
-    // receiveVideoCapability extendedVideoCapability，VP9660 收到后会重新评估
-    // H.239 分发列表，把现有演示流推给我们。这条消息不声明任何 sender 角色，
-    // 所以"会场发送"通道不会被点亮。
+    // 验证结论（2026-04-27）：单纯 SendCapabilitySet(FALSE) 重发 TCS 不能让
+    // VP9660 把我们加进 H.239 分发表 —— 内容相同的 TCS 被去重了。必须发一条
+    // 它认为"演示相关"的 H.245 消息才会触发重新评估。raw OLC(extendedVideo)
+    // 是目前已知唯一可靠的方式，副作用是 VP9660 UI 把我们标为"演示发送方"
+    // （"会场发送=是"）。功能优先：保留 raw OLC，UI 显示是次要。
+    //
+    // H323Plus 的 OpenLogicalChannel() 内部会创建 H323Channel、分配本地 RTP
+    // 端口、走 codec 工厂，对 extendedVideoCapability 总是返回 FALSE。
+    // 所以我们绕过它，直接用 WriteControlPDU() 把 PDU 发出去。MCU 收到后会
+    // 单独开一条 OLC 给我们推 H.239 流，由 CreateLogicalChannel() 处理。
     bool ok = false;
     try {
-        SendCapabilitySet(FALSE);
+        H323ControlPDU pdu;
+        H245_RequestMessage& req = pdu.Build(H245_RequestMessage::e_openLogicalChannel);
+        H245_OpenLogicalChannel& olc = (H245_OpenLogicalChannel&)(H245_OpenLogicalChannel&)req;
+
+        olc.m_forwardLogicalChannelNumber = 100 + attempt;
+
+        auto& fwd = olc.m_forwardLogicalChannelParameters;
+        fwd.m_dataType.SetTag(H245_DataType::e_videoData);
+        H245_VideoCapability& vc = fwd.m_dataType;
+        vc.SetTag(H245_VideoCapability::e_extendedVideoCapability);
+
+        H245_ExtendedVideoCapability& extCap =
+            (H245_ExtendedVideoCapability&)(H245_ExtendedVideoCapability&)vc;
+
+        extCap.m_videoCapability.SetSize(1);
+        H245_VideoCapability& innerVc = extCap.m_videoCapability[0];
+        innerVc.SetTag(H245_VideoCapability::e_genericVideoCapability);
+
+        H245_GenericCapability& h264Gen =
+            (H245_GenericCapability&)(H245_GenericCapability&)innerVc;
+        h264Gen.m_capabilityIdentifier.SetTag(H245_CapabilityIdentifier::e_standard);
+        PASN_ObjectId& h264Oid = (PASN_ObjectId&)(PASN_ObjectId&)h264Gen.m_capabilityIdentifier;
+        h264Oid.SetValue("0.0.8.241.0.0.1");
+        h264Gen.IncludeOptionalField(H245_GenericCapability::e_maxBitRate);
+        h264Gen.m_maxBitRate = 4096;
+
+        extCap.IncludeOptionalField(H245_ExtendedVideoCapability::e_videoCapabilityExtension);
+        extCap.m_videoCapabilityExtension.SetSize(1);
+        H245_GenericCapability& h239Gen = extCap.m_videoCapabilityExtension[0];
+        h239Gen.m_capabilityIdentifier.SetTag(H245_CapabilityIdentifier::e_standard);
+        PASN_ObjectId& h239Oid = (PASN_ObjectId&)(PASN_ObjectId&)h239Gen.m_capabilityIdentifier;
+        h239Oid.SetValue("0.0.8.239.1.2");
+
+        fwd.m_multiplexParameters.SetTag(
+            H245_OpenLogicalChannel_forwardLogicalChannelParameters_multiplexParameters::e_h2250LogicalChannelParameters);
+
+        H245_H2250LogicalChannelParameters& h2250fwd =
+            (H245_H2250LogicalChannelParameters&)(H245_H2250LogicalChannelParameters&)
+                fwd.m_multiplexParameters;
+        h2250fwd.m_sessionID = 10;
+
+        // 不填 reverseLogicalChannelParameters：我们是 receive-only，加上反向参数
+        // 会让 H323Plus 把 Ack 当成双向通道打开，找不到内部 channel 触发断言。
+
+        WriteControlPDU(pdu);
         ok = true;
-        spdlog::info("RecorderConnection: TCS re-sent (subscribe nudge)");
+        spdlog::info("RecorderConnection: raw OLC(extendedVideo, session=10) sent successfully");
+    } catch (const std::exception& e) {
+        spdlog::error("RecorderConnection: exception constructing raw OLC: {}", e.what());
     } catch (...) {
-        spdlog::error("RecorderConnection: exception in SendCapabilitySet");
+        spdlog::error("RecorderConnection: unknown exception constructing raw OLC");
     }
 
     if (!ok) {
-        spdlog::warn("RecorderConnection: TCS re-send failed on attempt {}", attempt);
+        spdlog::warn("RecorderConnection: raw OLC send failed on attempt {}", attempt);
     }
 
     // 重试节奏：第 1 次 5s（OnEstablished 安排），#2 +8s, #3 +15s, #4 +30s 后放弃
