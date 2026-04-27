@@ -815,108 +815,29 @@ void RecorderConnection::OnCapRefreshTimer(PTimer&, INT)
     }
 
     int attempt = capRefreshRetries_.fetch_add(1) + 1;
-    spdlog::info("RecorderConnection: H.239 subscribe attempt {} — sending raw OLC extendedVideoCapability session=10", attempt);
+    spdlog::info("RecorderConnection: H.239 subscribe attempt {} — re-sending TCS to nudge MCU", attempt);
 
-    // ── Strategy: bypass H323Plus::OpenLogicalChannel() entirely ──────
+    // ── Strategy: re-send TerminalCapabilitySet (TCS) ─────────────────
     //
-    // H323Plus's OpenLogicalChannel() creates an internal H323Channel object,
-    // allocates local RTP ports, goes through capability matching, etc.
-    // For extendedVideoCapability it always returns FALSE because the
-    // internal codec/factory infrastructure doesn't support it.
-    //
-    // Pcap analysis of a working TE shows it simply sends an H.245
-    // openLogicalChannel REQUEST with extendedVideoCapability dataType
-    // and sessionID=10.  The VP9660 MCU responds with openLogicalChannelAck
-    // and then pushes the H.239 stream to us.
-    //
-    // So we construct the raw H.245 PDU ourselves and send it via
-    // WriteControlPDU(), bypassing all H323Plus channel creation logic.
-    // When the MCU later sends us an OLC for the H.239 stream, our
-    // CreateLogicalChannel() / OnOpenLogicalChannel() handles it normally.
-
+    // 之前用 raw OLC(forward, extendedVideoCapability, session=10) 触发的副作用：
+    // VP9660 把我们当作演示发送方（"会场发送=是"），即使我们没真的推流。
+    // 改用 SendCapabilitySet(FALSE) 重发 TCS——我们的 capability 表里已声明
+    // receiveVideoCapability extendedVideoCapability，VP9660 收到后会重新评估
+    // H.239 分发列表，把现有演示流推给我们。这条消息不声明任何 sender 角色，
+    // 所以"会场发送"通道不会被点亮。
     bool ok = false;
     try {
-        // ── Build openLogicalChannel PDU ───────────────────────────
-        H323ControlPDU pdu;
-        H245_RequestMessage& req = pdu.Build(H245_RequestMessage::e_openLogicalChannel);
-        H245_OpenLogicalChannel& olc = (H245_OpenLogicalChannel&)(H245_OpenLogicalChannel&)req;
-
-        // forwardLogicalChannelNumber — pick a high number to avoid collisions
-        // with channels the MCU opens (MCU typically uses 1,2,3...)
-        olc.m_forwardLogicalChannelNumber = 100 + attempt;
-
-        // ── forwardLogicalChannelParameters ────────────────────────
-        auto& fwd = olc.m_forwardLogicalChannelParameters;
-
-        // dataType = videoData → extendedVideoCapability
-        fwd.m_dataType.SetTag(H245_DataType::e_videoData);
-        H245_VideoCapability& vc = fwd.m_dataType;
-        vc.SetTag(H245_VideoCapability::e_extendedVideoCapability);
-
-        H245_ExtendedVideoCapability& extCap =
-            (H245_ExtendedVideoCapability&)(H245_ExtendedVideoCapability&)vc;
-
-        // Inner video capability: genericVideoCapability OID=0.0.8.241.0.0.1 (H.264)
-        extCap.m_videoCapability.SetSize(1);
-        H245_VideoCapability& innerVc = extCap.m_videoCapability[0];
-        innerVc.SetTag(H245_VideoCapability::e_genericVideoCapability);
-
-        H245_GenericCapability& h264Gen =
-            (H245_GenericCapability&)(H245_GenericCapability&)innerVc;
-        h264Gen.m_capabilityIdentifier.SetTag(H245_CapabilityIdentifier::e_standard);
-        PASN_ObjectId& h264Oid = (PASN_ObjectId&)(PASN_ObjectId&)h264Gen.m_capabilityIdentifier;
-        h264Oid.SetValue("0.0.8.241.0.0.1");
-        h264Gen.IncludeOptionalField(H245_GenericCapability::e_maxBitRate);
-        h264Gen.m_maxBitRate = 4096;   // 4096 kbps
-
-        // videoCapabilityExtension: genericCapability OID=0.0.8.239.1.2 (H.239)
-        extCap.IncludeOptionalField(H245_ExtendedVideoCapability::e_videoCapabilityExtension);
-        extCap.m_videoCapabilityExtension.SetSize(1);
-        H245_GenericCapability& h239Gen = extCap.m_videoCapabilityExtension[0];
-        h239Gen.m_capabilityIdentifier.SetTag(H245_CapabilityIdentifier::e_standard);
-        PASN_ObjectId& h239Oid = (PASN_ObjectId&)(PASN_ObjectId&)h239Gen.m_capabilityIdentifier;
-        h239Oid.SetValue("0.0.8.239.1.2");
-
-        // multiplexParameters = h2250LogicalChannelParameters
-        fwd.m_multiplexParameters.SetTag(
-            H245_OpenLogicalChannel_forwardLogicalChannelParameters_multiplexParameters::e_h2250LogicalChannelParameters);
-
-        H245_H2250LogicalChannelParameters& h2250fwd =
-            (H245_H2250LogicalChannelParameters&)(H245_H2250LogicalChannelParameters&)
-                fwd.m_multiplexParameters;
-        h2250fwd.m_sessionID = 10;    // H.239 session
-
-        // ── No reverseLogicalChannelParameters ─────────────────────
-        // We are a receive-only recorder.  Including reverse parameters
-        // causes H323Plus to interpret the Ack as a bidirectional channel
-        // open, triggering Assertion fail when it can't find the internal
-        // channel object.  By omitting reverse parameters, the MCU will
-        // send us an OLC for the H.239 stream separately (which our
-        // CreateLogicalChannel() handles normally).
-        //
-        // NOTE: TE devices include reverse parameters because they are
-        // full bidirectional endpoints.  We are receive-only, so a
-        // unidirectional OLC is correct and simpler.
-
-        // ── Send it ───────────────────────────────────────────────
-        WriteControlPDU(pdu);
+        SendCapabilitySet(FALSE);
         ok = true;
-        spdlog::info("RecorderConnection: raw OLC(extendedVideo, session=10) sent successfully");
-
-    } catch (const std::exception& e) {
-        spdlog::error("RecorderConnection: exception constructing raw OLC: {}", e.what());
+        spdlog::info("RecorderConnection: TCS re-sent (subscribe nudge)");
     } catch (...) {
-        spdlog::error("RecorderConnection: unknown exception constructing raw OLC");
+        spdlog::error("RecorderConnection: exception in SendCapabilitySet");
     }
 
     if (!ok) {
-        spdlog::warn("RecorderConnection: raw OLC send failed on attempt {}", attempt);
+        spdlog::warn("RecorderConnection: TCS re-send failed on attempt {}", attempt);
     }
 
-    // Keep retrying regardless — the MCU may need time to process our
-    // terminalIDResponse and add us to the H.239 distribution list.
-    // Even after a successful send, we won't know if it worked until we
-    // receive an OLC from the MCU for session=10.
     // 重试节奏：第 1 次 5s（OnEstablished 安排），#2 +8s, #3 +15s, #4 +30s 后放弃
     static constexpr int kMaxAttempts = 4;
     if (attempt < kMaxAttempts) {
