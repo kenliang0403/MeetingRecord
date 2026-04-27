@@ -205,6 +205,12 @@ std::string RecorderEndpoint::dial()
     if (!cfg_.outgoing.mcu_host.empty())
         dest = "h323:" + cfg_.outgoing.dial_number + "@" + cfg_.outgoing.mcu_host;
 
+    // 自动清旧连接，避免连接累积导致 SrsStreamer 抢同一 stream key
+    if (GetConnections().GetSize() > 0) {
+        spdlog::info("RecorderEndpoint: dial — clearing existing calls before new MakeCall");
+        ClearAllCalls(H323Connection::EndedByLocalUser, TRUE);
+    }
+
     PString token;
     H323Connection* conn = MakeCall(PString(dest.c_str()), token);
     if (conn == nullptr || token.IsEmpty()) {
@@ -234,6 +240,12 @@ std::string RecorderEndpoint::dialTo(const std::string& number, const std::strin
     std::string dest = number;
     if (!host.empty())
         dest = "h323:" + number + "@" + host;
+
+    // 自动清旧连接
+    if (GetConnections().GetSize() > 0) {
+        spdlog::info("RecorderEndpoint: dialTo — clearing existing calls before new MakeCall");
+        ClearAllCalls(H323Connection::EndedByLocalUser, TRUE);
+    }
 
     PString token;
     H323Connection* conn = MakeCall(PString(dest.c_str()), token);

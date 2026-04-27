@@ -213,12 +213,14 @@ void RecorderConnection::OnEstablished()
                       activeMainPath_);
     }
 
-    // H.239 被动模式：不主动发送 raw OLC(extendedVideo, session=10)
+    // H.239 迟加入订阅：通话建立后等待 5s，如果 MCU 没主动推 H.239 OLC，就发送
+    // raw OLC(extendedVideoCapability, session=10) 提示 MCU 把现有的演示流分发给我们。
+    // 已收到 MCU OLC（h239Received_）或被拒（h239Rejected_）后定时器自动停止。
     capRefreshRetries_ = 0;
     h239Received_ = false;
     h239Rejected_ = false;
     capRefreshTimer_.SetNotifier(PCREATE_NOTIFIER(OnCapRefreshTimer));
-    // capRefreshTimer_.SetInterval(0, 2);   // disabled — passive H.239 mode
+    capRefreshTimer_.SetInterval(0, 5);
 
     // ── 主流视频自动发送 ──────────────────────────────────────────────────────
     // auto_send_video=true  → 任何通话建立后自动发送主流（模拟 TE 终端）
@@ -607,44 +609,12 @@ PBoolean RecorderConnection::OnHandleConferenceIndication(
     return FALSE;   // Let the base class continue default dispatch
 }
 
-// ── H.245 request interceptor (H.239 token grant) ────────────────────────
-//
-// Huawei VP9660 sends a genericRequest with OID=0.0.8.239.1.1 and
-// subMessage=2 (presentationTokenAck) to GRANT our token request.
-// We must NOT send the H.239 OLC until we receive this grant.
-// Without this, the MCU rejects with "terminal cannot send presentation"
-// (error 0x30000C0).
+// ── H.245 request interceptor ────────────────────────────────────────────
+// Inbound genericRequest from the MCU is unusual for the recorder; default
+// dispatch is fine.  H.239 token grant arrives as a genericResponse and is
+// handled in OnH245Response below.
 PBoolean RecorderConnection::OnH245Request(const H323ControlPDU& pdu)
 {
-    const H245_RequestMessage& req = pdu;
-    if (req.GetTag() == H245_RequestMessage::e_genericRequest) {
-        const H245_GenericMessage& gm =
-            (const H245_GenericMessage&)(const H245_GenericMessage&)req;
-
-        // Check OID = 0.0.8.239.1.1 (H.239 control)
-        if (gm.m_messageIdentifier.GetTag() == H245_CapabilityIdentifier::e_standard) {
-            const PASN_ObjectId& oid =
-                (const PASN_ObjectId&)(const PASN_ObjectId&)gm.m_messageIdentifier;
-            if (oid == "0.0.8.239.1.1" &&
-                gm.HasOptionalField(H245_GenericMessage::e_subMessageIdentifier))
-            {
-                int subMsg = (int)gm.m_subMessageIdentifier;
-                if (subMsg == 2) {
-                    // presentationTokenAck — MCU grants us the presenter token
-                    spdlog::info("RecorderConnection: received H.239 presentationTokenAck — sending OLC");
-                    h239TokenGranted_ = true;
-                    if (h239Sender_ && !h239SendActive_.load()) {
-                        sendH239OLC();
-                    }
-                    return TRUE;  // absorbed
-                } else if (subMsg == 4) {
-                    // presentationTokenRelease from MCU — MCU reclaimed token
-                    spdlog::info("RecorderConnection: received H.239 presentationTokenRelease from MCU");
-                    return TRUE;
-                }
-            }
-        }
-    }
     return H323Connection::OnH245Request(pdu);
 }
 
@@ -666,6 +636,32 @@ PBoolean RecorderConnection::OnH245Response(const H323ControlPDU& pdu)
 {
     const H245_ResponseMessage& resp = pdu;
     unsigned tag = resp.GetTag();
+
+    // ── H.239 presentationTokenResponse (subMsg=4 under OID 0.0.8.239.2) ──
+    // MCU grants the presenter token.  TE devices send IndicateOwner + OLC
+    // immediately after; we follow the same sequence.
+    if (tag == H245_ResponseMessage::e_genericResponse) {
+        const H245_GenericMessage& gm =
+            (const H245_GenericMessage&)(const H245_GenericMessage&)resp;
+        if (gm.m_messageIdentifier.GetTag() == H245_CapabilityIdentifier::e_standard) {
+            const PASN_ObjectId& oid =
+                (const PASN_ObjectId&)(const PASN_ObjectId&)gm.m_messageIdentifier;
+            if (oid == "0.0.8.239.2" &&
+                gm.HasOptionalField(H245_GenericMessage::e_subMessageIdentifier))
+            {
+                int subMsg = (int)gm.m_subMessageIdentifier;
+                if (subMsg == 4) {
+                    spdlog::info("RecorderConnection: received H.239 presentationTokenResponse (grant)");
+                    h239TokenGranted_ = true;
+                    sendH239IndicateOwner();
+                    if (h239Sender_ && !h239SendActive_.load()) {
+                        sendH239OLC();
+                    }
+                    return TRUE;
+                }
+            }
+        }
+    }
 
     if (tag == H245_ResponseMessage::e_openLogicalChannelAck) {
         const H245_OpenLogicalChannelAck& ack =
@@ -813,6 +809,10 @@ void RecorderConnection::OnCapRefreshTimer(PTimer&, INT)
     if (h239Rejected_.load()) {
         return;   // MCU rejected H.239 — stop retrying
     }
+    // 我们自己正在发送演示，没必要订阅别人的演示
+    if (h239SendActive_.load() || h239TokenGranted_.load()) {
+        return;
+    }
 
     int attempt = capRefreshRetries_.fetch_add(1) + 1;
     spdlog::info("RecorderConnection: H.239 subscribe attempt {} — sending raw OLC extendedVideoCapability session=10", attempt);
@@ -917,12 +917,10 @@ void RecorderConnection::OnCapRefreshTimer(PTimer&, INT)
     // terminalIDResponse and add us to the H.239 distribution list.
     // Even after a successful send, we won't know if it worked until we
     // receive an OLC from the MCU for session=10.
-    int nextInterval;
-    if (attempt < 3)       nextInterval = 5;     // 5s, 10s
-    else if (attempt < 5)  nextInterval = 15;    // 25s, 40s
-    else                   nextInterval = 30;    // every 30s
-
-    if (attempt < 20) {
+    // 重试节奏：第 1 次 5s（OnEstablished 安排），#2 +8s, #3 +15s, #4 +30s 后放弃
+    static constexpr int kMaxAttempts = 4;
+    if (attempt < kMaxAttempts) {
+        int nextInterval = (attempt == 1) ? 8 : (attempt == 2) ? 15 : 30;
         capRefreshTimer_.SetInterval(0, nextInterval);
         spdlog::info("RecorderConnection: H.239 retry #{} scheduled in {}s", attempt, nextInterval);
     } else {
@@ -955,18 +953,62 @@ std::string RecorderConnection::auxFilePath()    const { return auxRecorder_ ? a
 
 // ── H.239 presenter send ───────────────────────────────────────────────────
 //
-// startPresentation() implements a "sender" role for this connection:
-//  1. Sends H.239 presentationTokenRequest (subMsg=1) so MCU knows we want
-//     the presenter token.
-//  2. Creates a VideoSender, binds its local UDP RTP socket.
-//  3. Sends a raw openLogicalChannel(session=10, extendedVideo) that carries
-//     our local RTP endpoint so MCU knows where to send RTCP feedback.
-//  4. OnH245Response absorbs the Ack and starts VideoSender → real RTP flow.
+// Per ITU-T H.239 Annex C, the presenter handshake is:
+//   1. Sender → MCU : genericRequest, OID=0.0.8.239.2, subMsg=3 (presentationTokenRequest)
+//   2. MCU → Sender : genericResponse,                  subMsg=4 (presentationTokenResponse, grant)
+//   3. Sender → MCU : genericIndication,                subMsg=6 (presentationTokenIndicateOwner)
+//   4. Sender → MCU : openLogicalChannel(session=10, extendedVideoCapability)
+//   5. MCU → Sender : openLogicalChannelAck → start RTP
 //
-// stopPresentation():
-//  1. Stops VideoSender (drain + thread join).
-//  2. Sends closeLogicalChannel for the H.239 send channel.
-//  3. Sends H.239 presentationTokenRelease (subMsg=2).
+// stopPresentation() reverses with closeLogicalChannel + genericCommand
+// subMsg=5 (presentationTokenRelease).
+//
+// Verified against TE50/VP9660 captures (cap/te-发送演示.pcap frames 204-209).
+
+// H.239 generic-message OID (ITU-T H.239 Annex C, generic-message identifier)
+static const char* kH239GenericMessageOid = "0.0.8.239.2";
+
+// Token "channelId" parameter value used by Huawei TE/VP9660 for the
+// presentation token (parameterIdentifier=44).  The exact value is opaque
+// to MCU; we mirror the TE capture so VP9660 sees a familiar request.
+static const int kH239TokenChannelId = 258;
+
+// Build the messageContent for presentationToken{Request,IndicateOwner,Release}.
+// withBitRate=true adds parameterIdentifier=43 (only present in Request).
+static void buildH239TokenContent(H245_GenericMessage& gm,
+                                  unsigned terminalNumber,
+                                  bool withBitRate)
+{
+    gm.IncludeOptionalField(H245_GenericMessage::e_messageContent);
+    int n = withBitRate ? 3 : 2;
+    gm.m_messageContent.SetSize(n);
+    int idx = 0;
+
+    // pid=44 → token channelId
+    {
+        H245_GenericParameter& p = gm.m_messageContent[idx++];
+        p.m_parameterIdentifier.SetTag(H245_ParameterIdentifier::e_standard);
+        ((PASN_Integer&)(PASN_Integer&)p.m_parameterIdentifier) = 44;
+        p.m_parameterValue.SetTag(H245_ParameterValue::e_unsignedMin);
+        ((PASN_Integer&)(PASN_Integer&)p.m_parameterValue) = kH239TokenChannelId;
+    }
+    // pid=42 → terminalLabel.terminalNumber
+    {
+        H245_GenericParameter& p = gm.m_messageContent[idx++];
+        p.m_parameterIdentifier.SetTag(H245_ParameterIdentifier::e_standard);
+        ((PASN_Integer&)(PASN_Integer&)p.m_parameterIdentifier) = 42;
+        p.m_parameterValue.SetTag(H245_ParameterValue::e_unsignedMin);
+        ((PASN_Integer&)(PASN_Integer&)p.m_parameterValue) = terminalNumber;
+    }
+    if (withBitRate) {
+        // pid=43 → bitRate (mirrors TE: 118 ≈ 1.18 Mbps in TE's units)
+        H245_GenericParameter& p = gm.m_messageContent[idx++];
+        p.m_parameterIdentifier.SetTag(H245_ParameterIdentifier::e_standard);
+        ((PASN_Integer&)(PASN_Integer&)p.m_parameterIdentifier) = 43;
+        p.m_parameterValue.SetTag(H245_ParameterValue::e_unsignedMin);
+        ((PASN_Integer&)(PASN_Integer&)p.m_parameterValue) = 153;  // 1.5 Mbps
+    }
+}
 
 bool RecorderConnection::startPresentation()
 {
@@ -980,7 +1022,6 @@ bool RecorderConnection::startPresentation()
     }
 
     // ── Phase 1: Create VideoSender + bind socket ─────────────────────────
-    // The OLC is sent later in OnH245Request when MCU replies tokenAck.
     VideoSender::Config vsCfg;
     vsCfg.width   = 1280;
     vsCfg.height  = 720;
@@ -998,10 +1039,12 @@ bool RecorderConnection::startPresentation()
     spdlog::info("RecorderConnection: H.239 sender local UDP port={}",
                  h239Sender_->localPort());
 
+    // 我们要发送演示，关掉迟加入订阅 timer，避免与我方 OLC 冲突
+    capRefreshTimer_.Stop();
+
     // ── Phase 2: Send presentationTokenRequest ────────────────────────────
-    // VP9660 uses "silent grant" — it does NOT send any H.245 tokenAck back.
-    // It just locks the token internally and waits for us to send OLC.
-    // So: send tokenRequest immediately followed by OLC.
+    // OLC is deferred until the matching presentationTokenResponse arrives
+    // (handled in OnH245Response).
     try {
         H323ControlPDU pdu;
         H245_RequestMessage& req = pdu.Build(H245_RequestMessage::e_genericRequest);
@@ -1009,30 +1052,53 @@ bool RecorderConnection::startPresentation()
 
         gm.m_messageIdentifier.SetTag(H245_CapabilityIdentifier::e_standard);
         PASN_ObjectId& oid = (PASN_ObjectId&)(PASN_ObjectId&)gm.m_messageIdentifier;
-        oid.SetValue("0.0.8.239.1.1");
+        oid.SetValue(kH239GenericMessageOid);
 
         gm.IncludeOptionalField(H245_GenericMessage::e_subMessageIdentifier);
-        gm.m_subMessageIdentifier = 1;   // presentationTokenRequest
+        gm.m_subMessageIdentifier = 3;   // presentationTokenRequest
+
+        buildH239TokenContent(gm, h243TerminalNumber_.load(), /*withBitRate=*/true);
 
         WriteControlPDU(pdu);
-        spdlog::info("RecorderConnection: sent H.239 presentationTokenRequest");
+        spdlog::info("RecorderConnection: sent H.239 presentationTokenRequest "
+                     "(term={})", h243TerminalNumber_.load());
     } catch (...) {
         spdlog::warn("RecorderConnection: failed to send presentationTokenRequest");
         h239Sender_.reset();
         return false;
     }
 
-    // ── Phase 3: Send H.239 OLC immediately ──────────────────────────────
-    // VP9660 does not reply with tokenAck; it expects us to send OLC right away.
-    h239TokenGranted_ = true;
-    sendH239OLC();
-
     return true;
 }
 
-// ── sendH239OLC: Phase 2 — called after MCU grants presentationToken ──────
-// Sends the raw openLogicalChannel(session=10, extendedVideo) to the MCU.
-// VideoSender.startSending() is triggered when OLC Ack arrives (OnH245Response).
+void RecorderConnection::sendH239IndicateOwner()
+{
+    try {
+        H323ControlPDU pdu;
+        H245_IndicationMessage& ind =
+            pdu.Build(H245_IndicationMessage::e_genericIndication);
+        H245_GenericMessage& gm = (H245_GenericMessage&)(H245_GenericMessage&)ind;
+
+        gm.m_messageIdentifier.SetTag(H245_CapabilityIdentifier::e_standard);
+        PASN_ObjectId& oid = (PASN_ObjectId&)(PASN_ObjectId&)gm.m_messageIdentifier;
+        oid.SetValue(kH239GenericMessageOid);
+
+        gm.IncludeOptionalField(H245_GenericMessage::e_subMessageIdentifier);
+        gm.m_subMessageIdentifier = 6;   // presentationTokenIndicateOwner
+
+        buildH239TokenContent(gm, h243TerminalNumber_.load(), /*withBitRate=*/false);
+
+        WriteControlPDU(pdu);
+        spdlog::info("RecorderConnection: sent H.239 presentationTokenIndicateOwner "
+                     "(term={})", h243TerminalNumber_.load());
+    } catch (...) {
+        spdlog::warn("RecorderConnection: failed to send presentationTokenIndicateOwner");
+    }
+}
+
+// ── sendH239OLC: called from OnH245Response after presentationTokenResponse
+// (MCU grant).  Sends raw openLogicalChannel(session=10, extendedVideo) to
+// the MCU.  VideoSender.startSending() runs when the OLC Ack arrives.
 void RecorderConnection::sendH239OLC()
 {
 
@@ -1163,18 +1229,20 @@ bool RecorderConnection::stopPresentation()
             spdlog::warn("RecorderConnection: failed to send CLC");
         }
 
-        // ── 3. Send presentationTokenRelease ─────────────────────────────
+        // ── 3. Send presentationTokenRelease (genericCommand, subMsg=5) ──
         try {
             H323ControlPDU pdu;
-            H245_RequestMessage& req = pdu.Build(H245_RequestMessage::e_genericRequest);
-            H245_GenericMessage& gm = (H245_GenericMessage&)(H245_GenericMessage&)req;
+            H245_CommandMessage& cmd = pdu.Build(H245_CommandMessage::e_genericCommand);
+            H245_GenericMessage& gm = (H245_GenericMessage&)(H245_GenericMessage&)cmd;
 
             gm.m_messageIdentifier.SetTag(H245_CapabilityIdentifier::e_standard);
             PASN_ObjectId& oid =
                 (PASN_ObjectId&)(PASN_ObjectId&)gm.m_messageIdentifier;
-            oid.SetValue("0.0.8.239.1.1");
+            oid.SetValue(kH239GenericMessageOid);
             gm.IncludeOptionalField(H245_GenericMessage::e_subMessageIdentifier);
-            gm.m_subMessageIdentifier = 2;  // presentationTokenRelease
+            gm.m_subMessageIdentifier = 5;  // presentationTokenRelease
+
+            buildH239TokenContent(gm, h243TerminalNumber_.load(), /*withBitRate=*/false);
 
             WriteControlPDU(pdu);
             spdlog::info("RecorderConnection: sent H.239 presentationTokenRelease");

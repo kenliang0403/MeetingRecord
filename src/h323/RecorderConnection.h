@@ -51,8 +51,9 @@ public:
     bool isMainSending() const { return mainSendActive_.load(); }
 
     // H.239 presenter commands (called from TCP control handler).
-    // startPresentation() sends presentationTokenRequest + H.239 OLC, then
-    // VideoSender starts after MCU acks. stopPresentation() tears everything down.
+    // startPresentation() sends presentationTokenRequest; OLC + IndicateOwner
+    // follow once MCU returns presentationTokenResponse.  stopPresentation()
+    // sends CLC + presentationTokenRelease.
     bool startPresentation();
     bool stopPresentation();
     std::string meetingName()    const { return meetingName_; }
@@ -120,12 +121,13 @@ protected:
     // By overriding, we can safely absorb the Ack/Reject for our raw OLCs.
     PBoolean OnH245Response(const H323ControlPDU& pdu) override;
 
-    // Intercept H.245 requests: catch H.239 presentationTokenAck (genericResponse
-    // subMessage=2) from MCU so we know we're authorized to send the OLC.
+    // OnH245Request: defaults — H.239 token grant arrives as genericResponse
+    // and is handled in OnH245Response.
     PBoolean OnH245Request(const H323ControlPDU& pdu) override;
 
-    // Phase-2 helper: send raw H.239 OLC after token is granted.
+    // H.239 helpers: sent after presentationTokenResponse arrives.
     void sendH239OLC();
+    void sendH239IndicateOwner();
 
 private:
     RecorderEndpoint&               ep_;
