@@ -758,10 +758,30 @@ PBoolean RecorderConnection::OnH245Response(const H323ControlPDU& pdu)
             return TRUE;
         }
 
-        // Other raw OLCs (subscribe channel 100+) — absorb
+        // Other raw OLCs (subscribe channel 100+) — absorb, then immediately close.
+        //
+        // 我们的 raw OLC 只是为了"唤醒"VP9660 重新评估 H.239 分发表（让它把演示推给我们）。
+        // 拿到 ack 时 MCU 已经把我们加进接收列表并开始推 OLC(session=10) 给我们。
+        // 此时立刻 closeLogicalChannel 我们的 forward channel：VP9660 把"演示发送方"
+        // 标记清掉（"会场发送=否"），但它推给我们的那条独立 channel 不受影响。
         if (chanNum >= 100) {
             spdlog::info("RecorderConnection: absorbing Ack for raw OLC "
-                         "(channel {})", chanNum);
+                         "(channel {}), sending closeLogicalChannel", chanNum);
+            try {
+                H323ControlPDU closePdu;
+                H245_RequestMessage& closeReq = closePdu.Build(
+                    H245_RequestMessage::e_closeLogicalChannel);
+                H245_CloseLogicalChannel& clc =
+                    (H245_CloseLogicalChannel&)(H245_CloseLogicalChannel&)closeReq;
+                clc.m_forwardLogicalChannelNumber = chanNum;
+                clc.m_source.SetTag(H245_CloseLogicalChannel_source::e_lcse);
+                WriteControlPDU(closePdu);
+                spdlog::info("RecorderConnection: closeLogicalChannel sent for raw OLC "
+                             "channel {}", chanNum);
+            } catch (...) {
+                spdlog::warn("RecorderConnection: closeLogicalChannel send failed for "
+                             "channel {}", chanNum);
+            }
             return TRUE;   // Absorb — don't let default handler crash
         }
     }
@@ -788,9 +808,15 @@ PBoolean RecorderConnection::OnH245Response(const H323ControlPDU& pdu)
         }
     }
     else if (tag == H245_ResponseMessage::e_closeLogicalChannelAck) {
-        // CloseLogicalChannelAck may also come for our raw OLCs — absorb
-        spdlog::info("RecorderConnection: received closeLogicalChannelAck");
-        // Let base class handle this normally
+        const H245_CloseLogicalChannelAck& clcAck =
+            (const H245_CloseLogicalChannelAck&)(const H245_CloseLogicalChannelAck&)resp;
+        int ackChan = (int)clcAck.m_forwardLogicalChannelNumber;
+        spdlog::info("RecorderConnection: received closeLogicalChannelAck channel={}", ackChan);
+        // 我们自己 close 的 raw OLC（>=100）的 ack — 直接吸收，避免 base 找不到 channel 报错
+        if (ackChan >= 100) {
+            return TRUE;
+        }
+        // 其它 ack 交给 base
     }
 
     // For all other responses (including Ack/Reject for MCU-initiated
