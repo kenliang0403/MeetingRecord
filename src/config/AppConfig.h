@@ -22,8 +22,13 @@ struct RecorderConfig {
     std::string video_codec       = "libx264";
     std::string audio_codec       = "aac";
     int         video_bitrate     = 1500000;
-    int         audio_bitrate     = 64000;
+    int         audio_bitrate     = 128000;       // 录播+直播共享同一个 AAC 编码器
     int         rtp_port_base     = 20000;
+
+    // 音量线性增益。1.0 = 原始音量；1.10 ≈ +0.83 dB（默认轻微提升 10%）；
+    // 1.5 ≈ +3.5 dB；2.0 ≈ +6 dB。值大于 1 时若样本本身已接近满幅，
+    // FfmpegRecorder 会做 saturating clamp 防爆音（信息会损失但不会失真）。
+    double      audio_gain        = 1.10;
 };
 
 // Outgoing call: recorder dials the MCU conference room by itself.

@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <stdexcept>
 #include <cstring>
+#include <cmath>
+#include <vector>
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -260,8 +262,9 @@ bool FfmpegRecorder::addAudioStream()
     aFifo_ = av_audio_fifo_alloc(AV_SAMPLE_FMT_FLTP, aChannels_,
                                   aEncCtx_->frame_size > 0 ? aEncCtx_->frame_size * 4 : 4096);
 
-    spdlog::info("FfmpegRecorder: audio stream {}Hz {}ch codec={}",
-                 aSampleRate_, aChannels_, cfg_.audio_codec);
+    spdlog::info("FfmpegRecorder: audio stream {}Hz {}ch codec={} bitrate={} gain={:.2f}",
+                 aSampleRate_, aChannels_, cfg_.audio_codec,
+                 cfg_.audio_bitrate, cfg_.audio_gain);
     return true;
 }
 
@@ -371,11 +374,29 @@ void FfmpegRecorder::writeAudioSamples(const int16_t* pcm,
     if (!aPtsInitialized_) {
         int64_t offsetMs = ptsMs - globalStartMs_;
         if (offsetMs > 0) {
-            // Audio started after video. Advance the sample counter so the first frame 
+            // Audio started after video. Advance the sample counter so the first frame
             // will have the correct PTS offset in the file.
             aPts_ = av_rescale_q(offsetMs, {1, 1000}, {1, aSampleRate_});
         }
         aPtsInitialized_ = true;
+    }
+
+    // ── Apply linear gain (config.audio_gain) with saturating clamp ──
+    // gain == 1.0 → 直接用原始 pcm 指针，零拷贝；
+    // gain != 1.0 → 拷贝到本地缓冲乘倍数后 clamp，避免改写 caller 的 const buffer。
+    const double gain = cfg_.audio_gain;
+    const int16_t* srcPcm = pcm;
+    std::vector<int16_t> gainedBuf;
+    if (gain != 1.0) {
+        const int totalSamples = sampleCount * aChannels_;
+        gainedBuf.resize(totalSamples);
+        for (int i = 0; i < totalSamples; ++i) {
+            int32_t s = static_cast<int32_t>(std::lround(pcm[i] * gain));
+            if (s >  32767) s =  32767;
+            if (s < -32768) s = -32768;
+            gainedBuf[i] = static_cast<int16_t>(s);
+        }
+        srcPcm = gainedBuf.data();
     }
 
     // Convert s16 -> fltp
@@ -385,7 +406,7 @@ void FfmpegRecorder::writeAudioSamples(const int16_t* pcm,
     uint8_t** converted = nullptr;
     av_samples_alloc_array_and_samples(&converted, nullptr, aChannels_,
                                         sampleCount, AV_SAMPLE_FMT_FLTP, 0);
-    const uint8_t* inData[1] = { reinterpret_cast<const uint8_t*>(pcm) };
+    const uint8_t* inData[1] = { reinterpret_cast<const uint8_t*>(srcPcm) };
     swr_convert(swrCtx_, converted, sampleCount, inData, sampleCount);
 
     // Push into FIFO

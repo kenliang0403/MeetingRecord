@@ -18,7 +18,8 @@
     "video_codec":       "libx264",
     "audio_codec":       "aac",
     "video_bitrate":     2000000,
-    "audio_bitrate":     64000,
+    "audio_bitrate":     128000,
+    "audio_gain":        1.10,
     "rtp_port_base":     20000
   },
   "outgoing": {

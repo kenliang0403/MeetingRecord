@@ -41,8 +41,9 @@ AppConfig loadConfig(const std::string& path)
         cfg.recorder.video_codec       = r.value("video_codec",  "libx264");
         cfg.recorder.audio_codec       = r.value("audio_codec",  "aac");
         cfg.recorder.video_bitrate     = r.value("video_bitrate", 1500000);
-        cfg.recorder.audio_bitrate     = r.value("audio_bitrate", 64000);
+        cfg.recorder.audio_bitrate     = r.value("audio_bitrate", 128000);
         cfg.recorder.rtp_port_base     = r.value("rtp_port_base", 20000);
+        cfg.recorder.audio_gain        = r.value("audio_gain",    1.10);
     }
 
     // Outgoing call settings
