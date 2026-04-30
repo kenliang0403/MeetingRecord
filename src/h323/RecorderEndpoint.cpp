@@ -77,6 +77,15 @@ RecorderEndpoint::RecorderEndpoint(const AppConfig& cfg)
 {
     SetLocalUserName("RecorderNode");
 
+    // ── 把基类 H.323 vendor 字段（H.225 EndpointType.vendor 用到）改成华为 TE
+    // 0430 抓包确认：原值 Australia(9)/0/61/"HF Recorder recorder-core" 让 VP9660
+    // 在 RRQ/SETUP 阶段就把我们标为非华为终端，之后 SMC "发送/停止演示" 操作
+    // MCU 不会向我们下发 070E nonStandardCommand（直接 SMC 层报"终端不支持
+    // SMC 侧发辅流"）。改为 TE52 抓包同款 China(38)/21/555。
+    t35CountryCode   = 38;   // China
+    t35Extension     = 21;
+    manufacturerCode = 555;
+
     // Disable Fast Start: VP9660 spends ~6 s waiting for FS acks;
     // disabling gets Connect in ~100 ms.
     DisableFastStart(TRUE);
@@ -88,6 +97,32 @@ RecorderEndpoint::RecorderEndpoint(const AppConfig& cfg)
     unsigned max  = base + 200;  // enough for audio + video + H.239 sessions
     SetRtpIpPorts(base, max);
     spdlog::info("RecorderEndpoint: RTP port range set to {}-{}", base, max);
+    spdlog::info("RecorderEndpoint: spoofed vendor t35={}/{} mfr={} as Huawei TE",
+                 (unsigned)t35CountryCode, (unsigned)t35Extension,
+                 (unsigned)manufacturerCode);
+}
+
+// 覆盖 H.225 VendorIdentifier 的 productId/versionId 字符串（基类只填 t35/mfr）
+// 让 VP9660 在 RRQ/SETUP 中看到 productId="HUAWEI TEx0" + versionId="Release 19.0.920"
+//
+// 注：PASN_OctetString 用 const char* 构造/赋值时会按 strlen 取字节，
+// 但有些版本会附带终止符 — 直接通过 SetValue(const BYTE*, PINDEX) 显式
+// 指定长度避免 PER 编码越界（0429 实测旧代码会让 RRQ malformed，GK 直拒）。
+void RecorderEndpoint::SetVendorIdentifierInfo(H225_VendorIdentifier& info) const
+{
+    // 让基类先填 t35/mfr（来自构造函数中改写的 38/21/555）
+    H323EndPoint::SetVendorIdentifierInfo(info);
+
+    static const char kProductId[] = "HUAWEI TEx0";
+    static const char kVersionId[] = "Release 19.0.920";
+
+    info.IncludeOptionalField(H225_VendorIdentifier::e_productId);
+    info.m_productId.SetValue(reinterpret_cast<const BYTE*>(kProductId),
+                              sizeof(kProductId) - 1);   // 不含 NUL
+
+    info.IncludeOptionalField(H225_VendorIdentifier::e_versionId);
+    info.m_versionId.SetValue(reinterpret_cast<const BYTE*>(kVersionId),
+                              sizeof(kVersionId) - 1);
 }
 
 RecorderEndpoint::~RecorderEndpoint()

@@ -29,9 +29,11 @@ $srcDir = Join-Path $root "src"
 # upload edited sources
 & scp @scpCommon (Join-Path $srcDir "h323\RecorderEndpoint.cpp") ftadmin@<recorder_host>:/opt/recorder/recorder-core/src/h323/RecorderEndpoint.cpp | Out-Host
 & scp @scpCommon (Join-Path $srcDir "h323\RecorderConnection.cpp") ftadmin@<recorder_host>:/opt/recorder/recorder-core/src/h323/RecorderConnection.cpp | Out-Host
+& scp @scpCommon (Join-Path $srcDir "h323\RecorderConnection.h") ftadmin@<recorder_host>:/opt/recorder/recorder-core/src/h323/RecorderConnection.h | Out-Host
 
-# upload redeploy script
+# upload redeploy script and strip CRLF in case git autocrlf converted it
 & scp @scpCommon (Join-Path $PSScriptRoot "redeploy.sh") ftadmin@<recorder_host>:/tmp/redeploy.sh | Out-Host
+& ssh @sshCommon ftadmin@<recorder_host> "sed -i 's/\r$//' /tmp/redeploy.sh" | Out-Host
 
 # build & redeploy on remote
 $pw = $env:RECORDER_102_PASSWORD

@@ -615,7 +615,329 @@ PBoolean RecorderConnection::OnHandleConferenceIndication(
 // handled in OnH245Response below.
 PBoolean RecorderConnection::OnH245Request(const H323ControlPDU& pdu)
 {
+    const H245_RequestMessage& req = pdu;
+    spdlog::info("RecorderConnection: ← H245Request tag={}", (int)req.GetTag());
     return H323Connection::OnH245Request(pdu);
+}
+
+// ── H.245 command/indication: detect SMC-initiated H.239 close ────────
+//
+// 当 SMC 控制台关掉我们的演示时，MCU 会向我们发送一个控制消息。可能形态：
+//   A) genericCommand,    OID=0.0.8.239.2, subMsg=5 (presentationTokenRelease 命令我们释放)
+//   B) genericIndication, OID=0.0.8.239.2, subMsg=6 (IndicateOwner，告诉我们当前所有者变了)
+//   C) closeLogicalChannel(channel=200) 直接关掉我们的发送通道
+//
+// 这两个 hook 先把所有 H.239 OID 的 generic 消息打印出来，再判断 subMsg
+// 决定是否触发 stopPresentation()。channel 关闭路径已经在 OnClosedLogicalChannel
+// 处理（session=10）。
+namespace {
+bool isH239GenericMessage(const H245_GenericMessage& gm)
+{
+    if (gm.m_messageIdentifier.GetTag() != H245_CapabilityIdentifier::e_standard)
+        return false;
+    const PASN_ObjectId& oid =
+        (const PASN_ObjectId&)(const PASN_ObjectId&)gm.m_messageIdentifier;
+    return oid.AsString() == "0.0.8.239.2";
+}
+
+int h239SubMsg(const H245_GenericMessage& gm)
+{
+    return (int)gm.m_subMessageIdentifier.GetValue();
+}
+}  // namespace
+
+PBoolean RecorderConnection::OnH245Command(const H323ControlPDU& pdu)
+{
+    const H245_CommandMessage& cmd = pdu;
+    spdlog::info("RecorderConnection: ← H245Command tag={}", (int)cmd.GetTag());
+    if (cmd.GetTag() == H245_CommandMessage::e_genericCommand) {
+        const H245_GenericMessage& gm =
+            (const H245_GenericMessage&)(const H245_GenericMessage&)cmd;
+        if (isH239GenericMessage(gm)) {
+            int sub = h239SubMsg(gm);
+            spdlog::info("RecorderConnection: ← genericCommand H.239 subMsg={}", sub);
+            // subMsg=5 = presentationTokenRelease — MCU 命令我们释放演示
+            if (sub == 5 && h239SendActive_.load()) {
+                spdlog::info("RecorderConnection: SMC/MCU forced presentationTokenRelease "
+                             "→ stopping our H.239 send");
+                stopPresentation();
+                return TRUE;
+            }
+        } else {
+            spdlog::info("RecorderConnection: ← genericCommand (non-H.239)");
+        }
+    }
+    // Huawei nonStandardCommand：SMC 远端控制开/关演示
+    // 0429 信令抓包确认: SMC "发送/停止演示" 操作前 14-22ms，MCU→TE 发送
+    // h221 86/1/2457 nonStandardCommand，data 18B:
+    //   50 42 50 42 00 0C 07 0E 02 00 00 00 00 00 00 00 00 ZZ
+    //   PBPB    len   cmd070E param fields           action
+    // ZZ=01 → start presentation, ZZ=00 → stop presentation
+    else if (cmd.GetTag() == H245_CommandMessage::e_nonStandard) {
+        const H245_NonStandardMessage& nsm =
+            (const H245_NonStandardMessage&)(const H245_NonStandardMessage&)cmd;
+        const H245_NonStandardParameter& nsp = nsm.m_nonStandardData;
+        if (nsp.m_nonStandardIdentifier.GetTag() ==
+            H245_NonStandardIdentifier::e_h221NonStandard) {
+            const H245_NonStandardIdentifier_h221NonStandard& h221 =
+                (const H245_NonStandardIdentifier_h221NonStandard&)
+                (const H245_NonStandardIdentifier_h221NonStandard&)
+                nsp.m_nonStandardIdentifier;
+            unsigned cc    = (unsigned)h221.m_t35CountryCode;
+            unsigned ext   = (unsigned)h221.m_t35Extension;
+            unsigned manuf = (unsigned)h221.m_manufacturerCode;
+            const PBYTEArray& data = nsp.m_data.GetValue();
+            PINDEX dlen = data.GetSize();
+            spdlog::info("RecorderConnection: ← nonStandardCommand h221 "
+                         "{}/{}/{} data {} bytes", cc, ext, manuf, (int)dlen);
+            // Huawei vendor (86/1/2457) + PBPB...070E... 模式
+            if (cc == 86 && ext == 1 && manuf == 2457 && dlen >= 18) {
+                const BYTE* p = (const BYTE*)data;
+                bool isPbpb = (p[0] == 0x50 && p[1] == 0x42 &&
+                               p[2] == 0x50 && p[3] == 0x42);
+                bool is070E = (p[6] == 0x07 && p[7] == 0x0E);
+                if (isPbpb && is070E) {
+                    BYTE action = p[dlen - 1];
+                    spdlog::info("RecorderConnection: SMC 070E action=0x{:02X}", action);
+                    if (action == 0x01) {
+                        if (!h239SendActive_.load()) {
+                            spdlog::info("RecorderConnection: SMC remote-start presentation");
+                            startPresentation();
+                        } else {
+                            spdlog::info("RecorderConnection: SMC remote-start ignored "
+                                         "(already presenting)");
+                        }
+                        return TRUE;
+                    } else if (action == 0x00) {
+                        if (h239SendActive_.load()) {
+                            spdlog::info("RecorderConnection: SMC remote-stop presentation");
+                            stopPresentation();
+                        } else {
+                            spdlog::info("RecorderConnection: SMC remote-stop ignored "
+                                         "(not presenting)");
+                        }
+                        return TRUE;
+                    }
+                }
+            }
+            // 任何 Huawei 私有 nonStandardCommand (86/1/*) 都静默吞掉。
+            // 关键：MCU 在通话早期会发 mfr=4607 探测 Huawei 私有控制支持；
+            // 若回 functionNotUnderstood，MCU 把我们标记为不支持远端 H.239 控制，
+            // 之后 SMC 操作时根本不会再向我们发送 070E 命令。
+            // 0429 抓包确认：16:32:03 收到 86/1/4607 8B → 我们回 functionNotUnderstood
+            // → 16:32:19 SMC 发送演示 失败，期间 MCU 完全没发任何控制命令。
+            if (cc == 86 && ext == 1) {
+                spdlog::info("RecorderConnection: absorbing Huawei nonStandardCommand "
+                             "(cc=86 ext=1 mfr={}) to avoid functionNotUnderstood reply",
+                             manuf);
+                return TRUE;
+            }
+        }
+    }
+    return H323Connection::OnH245Command(pdu);
+}
+
+// ── TCS injection: append Huawei vendor markers so MCU treats us as Huawei ──
+//
+// 0429 抓包对比 TE52 vs 我们的 TCS, TE52 含三条 nonStandardCapability:
+//   A) receiveAndTransmitAudioCapability:nonStandard h221 38/0/8209 56B
+//   B) receiveVideoCapability:nonStandard           h221 38/0/8209 32B
+//   C) 顶层 capability:nonStandard (vendor 标识)    h221 28/21/555  16B
+// 第一次只注入 (C) MCU 仍判定我们 "不支持 SMC 侧发辅流"。补充 (A) 和 (B):
+// 这两条声明 "我有华为私有音/视频编解码"，是 MCU 识别 Huawei 端的关键。
+// 注意：MCU 可能尝试以这些 codec 给我们建 OLC—— 我们需要在
+// OnCreateLogicalChannel 拒绝（或允许后忽略 RTP）。先按 receive-only 方向声明。
+namespace {
+void appendNonStandardEntry(H245_TerminalCapabilitySet& pdu,
+                             unsigned& nextNum,
+                             unsigned t35CC,
+                             unsigned t35Ext,
+                             unsigned mfr,
+                             const BYTE* data, PINDEX dataLen,
+                             int subTag /* -1 = top-level capability:nonStandard;
+                                           else H245_Capability::e_xxx */)
+{
+    PINDEX i = pdu.m_capabilityTable.GetSize();
+    pdu.m_capabilityTable.SetSize(i + 1);
+    H245_CapabilityTableEntry& entry = pdu.m_capabilityTable[i];
+    entry.m_capabilityTableEntryNumber = nextNum++;
+    entry.IncludeOptionalField(H245_CapabilityTableEntry::e_capability);
+
+    if (subTag < 0) {
+        // 顶层 nonStandard capability (Entry C)
+        entry.m_capability.SetTag(H245_Capability::e_nonStandard);
+        H245_NonStandardParameter& ns =
+            (H245_NonStandardParameter&)(H245_NonStandardParameter&)entry.m_capability;
+        ns.m_nonStandardIdentifier.SetTag(H245_NonStandardIdentifier::e_h221NonStandard);
+        H245_NonStandardIdentifier_h221NonStandard& h221 =
+            (H245_NonStandardIdentifier_h221NonStandard&)
+            (H245_NonStandardIdentifier_h221NonStandard&)
+            ns.m_nonStandardIdentifier;
+        h221.m_t35CountryCode   = t35CC;
+        h221.m_t35Extension     = t35Ext;
+        h221.m_manufacturerCode = mfr;
+        ns.m_data.SetValue(data, dataLen);
+    } else if (subTag == H245_Capability::e_receiveAndTransmitAudioCapability) {
+        // Entry A: receiveAndTransmitAudioCapability → AudioCapability::nonStandard
+        entry.m_capability.SetTag(H245_Capability::e_receiveAndTransmitAudioCapability);
+        H245_AudioCapability& ac =
+            (H245_AudioCapability&)(H245_AudioCapability&)entry.m_capability;
+        ac.SetTag(H245_AudioCapability::e_nonStandard);
+        H245_NonStandardParameter& ns =
+            (H245_NonStandardParameter&)(H245_NonStandardParameter&)ac;
+        ns.m_nonStandardIdentifier.SetTag(H245_NonStandardIdentifier::e_h221NonStandard);
+        H245_NonStandardIdentifier_h221NonStandard& h221 =
+            (H245_NonStandardIdentifier_h221NonStandard&)
+            (H245_NonStandardIdentifier_h221NonStandard&)
+            ns.m_nonStandardIdentifier;
+        h221.m_t35CountryCode   = t35CC;
+        h221.m_t35Extension     = t35Ext;
+        h221.m_manufacturerCode = mfr;
+        ns.m_data.SetValue(data, dataLen);
+    } else if (subTag == H245_Capability::e_receiveVideoCapability) {
+        // Entry B: receiveVideoCapability → VideoCapability::nonStandard
+        entry.m_capability.SetTag(H245_Capability::e_receiveVideoCapability);
+        H245_VideoCapability& vc =
+            (H245_VideoCapability&)(H245_VideoCapability&)entry.m_capability;
+        vc.SetTag(H245_VideoCapability::e_nonStandard);
+        H245_NonStandardParameter& ns =
+            (H245_NonStandardParameter&)(H245_NonStandardParameter&)vc;
+        ns.m_nonStandardIdentifier.SetTag(H245_NonStandardIdentifier::e_h221NonStandard);
+        H245_NonStandardIdentifier_h221NonStandard& h221 =
+            (H245_NonStandardIdentifier_h221NonStandard&)
+            (H245_NonStandardIdentifier_h221NonStandard&)
+            ns.m_nonStandardIdentifier;
+        h221.m_t35CountryCode   = t35CC;
+        h221.m_t35Extension     = t35Ext;
+        h221.m_manufacturerCode = mfr;
+        ns.m_data.SetValue(data, dataLen);
+    }
+}
+}  // namespace
+
+void RecorderConnection::OnSendCapabilitySet(H245_TerminalCapabilitySet& pdu)
+{
+    H323Connection::OnSendCapabilitySet(pdu);
+
+    if (!pdu.HasOptionalField(H245_TerminalCapabilitySet::e_capabilityTable)) {
+        pdu.IncludeOptionalField(H245_TerminalCapabilitySet::e_capabilityTable);
+    }
+
+    unsigned maxNum = 0;
+    for (PINDEX i = 0; i < pdu.m_capabilityTable.GetSize(); ++i) {
+        unsigned n = (unsigned)pdu.m_capabilityTable[i].m_capabilityTableEntryNumber;
+        if (n > maxNum) maxNum = n;
+    }
+    unsigned nextNum = maxNum + 1;
+    PINDEX startSize = pdu.m_capabilityTable.GetSize();
+
+    // Entry A (华为私有音频 codec 标识) 已禁用 ──
+    // 0430 抓包：声明该 cap 后 MCU 立即用 nonStd h221 38/0/8209 发 OLC,
+    // 而我们没有真正的 receiver → reject(unknownDataType) → SMC 报
+    // "通道没有打开"导致整个呼叫失败。
+    // 现在依赖 H.225 vendor 伪装成华为 TE52 (38/21/555 + "HUAWEI TEx0")
+    // 让 MCU 把我们当 Huawei 终端，但 audio 协商仍用标准 G.711/G.722/AAC-LD。
+    // 若后续发现 MCU 对此终端类型仍跳过 070E，再考虑实现一个伪造的
+    // NonStandardAudioRecvCap (accept-and-discard) 把 Entry A 重新打开。
+
+    // Entry B: 华为私有视频 codec 标识 (h221 38/0/8209, 32B 含 "RTRT")
+    static const BYTE huaweiVideoCodec[] = {
+        0x00,0x00,0x00,0x01, 0x00,0x00,0x00,0x18,
+        0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x04,
+        0x52,0x54,0x52,0x54, 0x00,0x00,0x00,0x03,
+        0x00,0x00,0x00,0x04, 0x02,0x94,0x3d,0xee
+    };
+    appendNonStandardEntry(pdu, nextNum, 38, 0, 8209,
+                           huaweiVideoCodec, sizeof(huaweiVideoCodec),
+                           H245_Capability::e_receiveVideoCapability);
+
+    // Entry C: 顶层 vendor marker (h221 28/21/555, 16B)
+    static const BYTE huaweiVendorMarker[] = {
+        0x00,0x00,0x00,0x01, 0x00,0x00,0x00,0x08,
+        0x00,0x01,0x00,0x00, 0x00,0x00,0x00,0x00
+    };
+    appendNonStandardEntry(pdu, nextNum, 28, 21, 555,
+                           huaweiVendorMarker, sizeof(huaweiVendorMarker),
+                           -1);
+
+    // 现在只有 Entry B (video 38/0/8209) 和 Entry C (vendor marker 28/21/555)
+    unsigned entryB = maxNum + 1;
+    unsigned entryC = maxNum + 2;
+
+    // 仅放入 capabilityTable 不够 — H.245 spec 要求每个用到的 entry 必须被
+    // capabilityDescriptors[].simultaneousCapabilities[].alternativeCapability
+    // 引用，否则 MCU 视为无效 / 未声明。追加新 descriptor，里面 B/C 单 cap
+    // simultaneous-set，仅作 vendor 识别 hint。
+    if (!pdu.HasOptionalField(H245_TerminalCapabilitySet::e_capabilityDescriptors)) {
+        pdu.IncludeOptionalField(H245_TerminalCapabilitySet::e_capabilityDescriptors);
+    }
+    PINDEX descIdx = pdu.m_capabilityDescriptors.GetSize();
+    pdu.m_capabilityDescriptors.SetSize(descIdx + 1);
+    H245_CapabilityDescriptor& desc = pdu.m_capabilityDescriptors[descIdx];
+
+    unsigned maxDescNum = 0;
+    for (PINDEX i = 0; i < descIdx; ++i) {
+        unsigned n = (unsigned)pdu.m_capabilityDescriptors[i].m_capabilityDescriptorNumber;
+        if (n > maxDescNum) maxDescNum = n;
+    }
+    desc.m_capabilityDescriptorNumber = maxDescNum + 1;
+    desc.IncludeOptionalField(H245_CapabilityDescriptor::e_simultaneousCapabilities);
+    desc.m_simultaneousCapabilities.SetSize(2);
+    auto fillSet = [](H245_AlternativeCapabilitySet& s, unsigned n) {
+        s.SetSize(1);
+        s[0] = n;
+    };
+    fillSet(desc.m_simultaneousCapabilities[0], entryB);
+    fillSet(desc.m_simultaneousCapabilities[1], entryC);
+
+    spdlog::info("RecorderConnection: injected 2 Huawei nonStandardCapability entries "
+                 "(B=#{} video 38/0/8209, C=#{} marker 28/21/555); "
+                 "table {}→{}, added capabilityDescriptor #{} with 2 single-cap sim-sets "
+                 "(Entry A audio disabled — MCU will use standard G.722/G.711)",
+                 entryB, entryC,
+                 (int)startSize, (int)pdu.m_capabilityTable.GetSize(),
+                 maxDescNum + 1);
+}
+
+PBoolean RecorderConnection::OnH245Indication(const H323ControlPDU& pdu)
+{
+    const H245_IndicationMessage& ind = pdu;
+    spdlog::info("RecorderConnection: ← H245Indication tag={}", (int)ind.GetTag());
+    if (ind.GetTag() == H245_IndicationMessage::e_genericIndication) {
+        const H245_GenericMessage& gm =
+            (const H245_GenericMessage&)(const H245_GenericMessage&)ind;
+        if (isH239GenericMessage(gm)) {
+            int sub = h239SubMsg(gm);
+            spdlog::info("RecorderConnection: ← genericIndication H.239 subMsg={}", sub);
+            // subMsg=6 = IndicateOwner — 当前所有者变更。如果新 owner 不是我们
+            // (terminalNumber 不同)，说明被夺权了，停止发送。
+            // 暂时先只打日志，等观察到具体内容再决定是否动作。
+        } else {
+            spdlog::info("RecorderConnection: ← genericIndication (non-H.239)");
+        }
+    }
+    // 同 OnH245Command：吞掉 Huawei 私有 nonStandardIndication，避免基类回 functionNotUnderstood
+    else if (ind.GetTag() == H245_IndicationMessage::e_nonStandard) {
+        const H245_NonStandardMessage& nsm =
+            (const H245_NonStandardMessage&)(const H245_NonStandardMessage&)ind;
+        const H245_NonStandardParameter& nsp = nsm.m_nonStandardData;
+        if (nsp.m_nonStandardIdentifier.GetTag() ==
+            H245_NonStandardIdentifier::e_h221NonStandard) {
+            const H245_NonStandardIdentifier_h221NonStandard& h221 =
+                (const H245_NonStandardIdentifier_h221NonStandard&)
+                (const H245_NonStandardIdentifier_h221NonStandard&)
+                nsp.m_nonStandardIdentifier;
+            unsigned cc    = (unsigned)h221.m_t35CountryCode;
+            unsigned ext   = (unsigned)h221.m_t35Extension;
+            unsigned manuf = (unsigned)h221.m_manufacturerCode;
+            spdlog::info("RecorderConnection: ← nonStandardIndication h221 {}/{}/{}",
+                         cc, ext, manuf);
+            if (cc == 86 && ext == 1) {
+                return TRUE;
+            }
+        }
+    }
+    return H323Connection::OnH245Indication(pdu);
 }
 
 // ── H.245 response interceptor ──────────────────────────────────────────
@@ -817,6 +1139,20 @@ PBoolean RecorderConnection::OnH245Response(const H323ControlPDU& pdu)
             return TRUE;
         }
         // 其它 ack 交给 base
+    }
+    // ── conferenceResponse (tag=20): MCU 在通话开始时会推送 terminalListResponse、
+    //   requestAllTerminalIDsResponse 这类会议成员通报信息。PTLib 基类对这些
+    //   "未关联请求"的 conferenceResponse 默认回 indication: functionNotUnderstood，
+    //   这正是 0429 16:46:28 抓包 frame 341/342 的源头。
+    //   MCU 收到 functionNotUnderstood 后会判定我们不是华为终端，之后 SMC
+    //   "发送/停止演示"操作再也不会向我们下发 070E nonStandardCommand。
+    //   解决：吞掉所有 conferenceResponse，仅记日志，不回 functionNotUnderstood。
+    else if (tag == H245_ResponseMessage::e_conferenceResponse) {
+        const H245_ConferenceResponse& cr =
+            (const H245_ConferenceResponse&)(const H245_ConferenceResponse&)resp;
+        spdlog::info("RecorderConnection: absorbing conferenceResponse subTag={} "
+                     "to avoid functionNotUnderstood reply", (int)cr.GetTag());
+        return TRUE;
     }
 
     // For all other responses (including Ack/Reject for MCU-initiated

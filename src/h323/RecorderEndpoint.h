@@ -113,6 +113,13 @@ protected:
         unsigned bufferSize,
         H323AudioCodec& codec) override;
 
+    // 把 H.225 vendor 字段伪装成华为 TE，让 VP9660 MCU 把我们当作华为终端
+    // (否则 SMC 操作时 MCU 不会向我们下发 070E nonStandardCommand)
+    // TE52 抓包参考:
+    //   t35CountryCode=38 (China), t35Extension=21, manufacturerCode=555
+    //   productId="HUAWEI TEx0", versionId="Release 19.0.920"
+    void SetVendorIdentifierInfo(H225_VendorIdentifier& info) const override;
+
     H235Authenticators CreateAuthenticators() override;
 
 private:

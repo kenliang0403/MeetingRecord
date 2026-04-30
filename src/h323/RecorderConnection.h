@@ -125,6 +125,18 @@ protected:
     // and is handled in OnH245Response.
     PBoolean OnH245Request(const H323ControlPDU& pdu) override;
 
+    // Diagnostic + handlers for MCU-initiated H.239 control:
+    // SMC console "close presentation" likely arrives as a genericCommand
+    // or genericIndication carrying H.239 OID 0.0.8.239.2.
+    PBoolean OnH245Command(const H323ControlPDU& pdu) override;
+    PBoolean OnH245Indication(const H323ControlPDU& pdu) override;
+
+    // Inject Huawei vendor-marker nonStandardCapability into our TCS.
+    // Why: 0429 信令抓包对比显示，TE52 的 TCS 含 h221 28/21/555 16B 厂商标识，
+    //      MCU 据此识别 Huawei 端、之后才会发送 070E 远端开/关演示控制命令；
+    //      我们的录播 TCS 缺这条，因此 SMC 操作时 MCU 从不向我们发送控制。
+    void OnSendCapabilitySet(H245_TerminalCapabilitySet& pdu) override;
+
     // H.239 helpers: sent after presentationTokenResponse arrives.
     void sendH239OLC();
     void sendH239IndicateOwner();
