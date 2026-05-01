@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}状态 — Recorder Admin{% endblock %}
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+{% endblock %}
+{% block body %}
+<h2>实时状态</h2>
+
+<div class="status-grid">
+  <div class="card">
+    <h3>设备</h3>
+    <table id="status-tbl"><tbody>
+      <tr><th>注册</th><td id="s-reg">…</td></tr>
+      <tr><th>Alias</th><td id="s-alias">…</td></tr>
+      <tr><th>GK</th><td id="s-gk">…</td></tr>
+      <tr><th>通话中</th><td id="s-incall">…</td></tr>
+      <tr><th>会议</th><td id="s-meeting">…</td></tr>
+      <tr><th>主流文件</th><td id="s-mainfile">…</td></tr>
+      <tr><th>辅流文件</th><td id="s-auxfile">…</td></tr>
+    </tbody></table>
+  </div>
+
+  <div class="card">
+    <h3>音频电平 (dBFS)</h3>
+    <div class="vu-row">
+      <div class="vu-col">
+        <div class="vu-label">RMS</div>
+        <canvas id="vu-rms" width="40" height="220"></canvas>
+        <div class="vu-num" id="vu-rms-num">—</div>
+      </div>
+      <div class="vu-col">
+        <div class="vu-label">PEAK</div>
+        <canvas id="vu-peak" width="40" height="220"></canvas>
+        <div class="vu-num" id="vu-peak-num">—</div>
+      </div>
+    </div>
+    <div class="vu-foot">0 dBFS = 满幅；&lt; -60 视为静默</div>
+  </div>
+</div>
+
+<h2 class="mt">直播流</h2>
+<div class="player-grid">
+  <div class="card">
+    <h3>主流</h3>
+    <video id="v-main" controls muted playsinline></video>
+    <div id="v-main-msg" class="player-msg"></div>
+  </div>
+  <div class="card">
+    <h3>辅流（演示）</h3>
+    <video id="v-aux" controls muted playsinline></video>
+    <div id="v-aux-msg" class="player-msg"></div>
+  </div>
+</div>
+
+<script>
+  const SRS_BASE   = "{{ srs_base }}";
+  const MAIN_KEY   = "{{ main_stream }}";
+  const AUX_KEY    = "{{ aux_stream }}";
+</script>
+<script src="{{ url_for('static', filename='vu.js') }}"></script>
+<script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}录像回放 — Recorder Admin{% endblock %}
+{% block body %}
+<h2>录像列表</h2>
+{% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
+
+{% if items %}
+<table class="rec-tbl">
+  <thead>
+    <tr>
+      <th>会议号</th><th>会议名</th><th>开始时间</th><th>段数</th><th>路径</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in items %}
+    <tr>
+      <td><a href="{{ url_for('meeting_page', meeting_dir=r.dir_name) }}">{{ r.meeting_id }}</a></td>
+      <td>{{ r.meeting_name or '—' }}</td>
+      <td>{{ r.first_start_ts or '—' }}</td>
+      <td>{{ (r.segments or []) | length }}</td>
+      <td class="muted">{{ r.dir_name }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>暂无录像。</p>
+{% endif %}
+{% endblock %}

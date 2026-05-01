@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}登录 — Recorder Admin{% endblock %}
+{% block body %}
+<div class="login-box">
+  <h1>Recorder 管理</h1>
+  <form method="post">
+    <label>用户名 <input name="username" autofocus required></label>
+    <label>密码 <input name="password" type="password" required></label>
+    <button type="submit">登录</button>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}{{ meeting_dir }} — Recorder Admin{% endblock %}
+{% block body %}
+<p><a href="{{ url_for('recordings_page') }}">← 返回列表</a></p>
+<h2>{{ meeting_dir }}</h2>
+
+{% if main_files %}
+<h3>主流（{{ main_files|length }}）</h3>
+<div class="player-grid">
+  {% for f in main_files %}
+  <div class="card">
+    <div class="muted">{{ f }}</div>
+    <video controls preload="metadata" src="{{ url_for('play_file', meeting_dir=meeting_dir, fname=f) }}"></video>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if aux_files %}
+<h3 class="mt">辅流（{{ aux_files|length }}）</h3>
+<div class="player-grid">
+  {% for f in aux_files %}
+  <div class="card">
+    <div class="muted">{{ f }}</div>
+    <video controls preload="metadata" src="{{ url_for('play_file', meeting_dir=meeting_dir, fname=f) }}"></video>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if not main_files and not aux_files %}
+<p>该会议无 mp4 文件。</p>
+{% endif %}
+
+{% if meeting_json %}
+<h3 class="mt">meeting.json</h3>
+<pre class="cfg-pre">{{ meeting_json | tojson(indent=2) }}</pre>
+{% endif %}
+{% endblock %}

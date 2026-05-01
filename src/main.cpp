@@ -7,6 +7,7 @@
 #include "h323/RecorderEndpoint.h"
 #include "h323/RecorderConnection.h"
 #include "meeting/MeetingRegistry.h"
+#include "media/AudioLevelMeter.h"
 #include "tcp/ControlServer.h"
 #include "util/Logger.h"
 #include <h323pluginmgr.h>
@@ -145,6 +146,22 @@ void RecorderApp::Main()
         return nlohmann::json{{"ok", true}, {"data", data}};
     });
 
+    // ── audio_levels: realtime VU meter values for web admin ────────────────
+    // 返回当前主流 audio capture 的瞬时电平。Web 管理页 ~10Hz 拉取，绘制 VU 表。
+    // peak: 瞬时峰值（快速跳）；rms: 指数平滑后的平均（慢速移动）；单位 dBFS [-120, 0]
+    // age_ms: 距上次喂样的毫秒数；> 500 表示静默/无通话（值已被衰减到 -120）
+    ctrlServer.registerHandler("audio_levels", [&](const nlohmann::json&) {
+        auto s = AudioLevelMeter::instance().snapshot();
+        return nlohmann::json{
+            {"ok", true},
+            {"data", {
+                {"peak_dbfs", s.peak_dbfs},
+                {"rms_dbfs",  s.rms_dbfs},
+                {"age_ms",    s.age_ms}
+            }}
+        };
+    });
+
     // ── config: return current full config ──────────────────────────────────
     ctrlServer.registerHandler("config", [&](const nlohmann::json&) {
         nlohmann::json data = {
@@ -168,7 +185,15 @@ void RecorderApp::Main()
                 {"audio_codec",       cfg.recorder.audio_codec},
                 {"video_bitrate",     cfg.recorder.video_bitrate},
                 {"audio_bitrate",     cfg.recorder.audio_bitrate},
+                {"audio_gain",        cfg.recorder.audio_gain},
                 {"rtp_port_base",     cfg.recorder.rtp_port_base}
+            }},
+            {"streaming", {
+                {"enabled",            cfg.streaming.enabled},
+                {"rtmp_server",        cfg.streaming.rtmp_server},
+                {"main_key_tpl",       cfg.streaming.main_key_tpl},
+                {"aux_key_tpl",        cfg.streaming.aux_key_tpl},
+                {"push_aux",           cfg.streaming.push_aux}
             }},
             {"outgoing", {
                 {"enabled",           cfg.outgoing.enabled},

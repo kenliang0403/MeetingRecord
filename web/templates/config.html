@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}配置 — Recorder Admin{% endblock %}
+{% block body %}
+<h2>运行配置 <small>（只读）</small></h2>
+{% if cfg.ok %}
+<pre class="cfg-pre">{{ cfg.data | tojson(indent=2) }}</pre>
+<p class="muted">敏感字段（密码等）已经在服务端 mask 为 ***。要修改请在服务器上编辑 <code>/opt/recorder/config/config.json</code> 后重启进程。</p>
+{% else %}
+<div class="flash flash-error">读配置失败：{{ cfg.error }}</div>
+{% endif %}
+{% endblock %}

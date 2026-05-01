@@ -3,6 +3,7 @@
 
 #include "AudioCapturePChannel.h"
 #include "FfmpegRecorder.h"
+#include "AudioLevelMeter.h"
 #include <spdlog/spdlog.h>
 #include <chrono>
 #include <thread>
@@ -70,6 +71,12 @@ PBoolean AudioCapturePChannel::Write(const void* buf, PINDEX len)
 
     recorder_->writeAudioSamples(
         reinterpret_cast<const int16_t*>(buf), sampleCountPerChannel, nowMs);
+
+    // 实时电平采样供 web 管理页 VU 表使用（无锁）
+    AudioLevelMeter::instance().feedPcm(
+        reinterpret_cast<const int16_t*>(buf),
+        sampleCountPerChannel,
+        activeChannels);
 
     lastWriteCount = len;
     return TRUE;
