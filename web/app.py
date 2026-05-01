@@ -123,22 +123,131 @@ def dashboard():
     )
 
 
+# --- 字段化配置：只暴露常用项；保存时 read-merge-write，其它字段原封不动 ---
+#
+# 每条 = (form name, 中文标签, 类型, JSON 路径, 提示文案/选项)
+# 类型：text / password / int / float / checkbox / select
+# 路径：tuple，允许嵌套，如 ("gk","host") 表示 cfg["gk"]["host"]
+# password 字段 placeholder 显示 "******" 表示已设；提交空字符串= 不修改
+EDITABLE_FIELDS = [
+    # ── 网关与终端身份 ────────────────────────────────────────────
+    ("__group_gk", "网关 GK / 终端身份", None, None, None),
+    ("gk_host",     "GK 服务器地址", "text",     ("gk", "host"),     "例如 <gk_host>"),
+    ("gk_alias",    "终端 Alias",    "text",     ("gk", "alias"),    "例如 <alias-1>"),
+    ("gk_password", "GK 密码",       "password", ("gk", "password"), "留空保留原值；输入新值覆盖"),
+    ("terminal_id", "终端显示名",    "text",     ("terminal_id",),   "MCU 名册中显示的中文名"),
+
+    # ── 主动呼叫 ─────────────────────────────────────────────────
+    ("__group_outgoing", "主动呼叫（开机自动拨号）", None, None, None),
+    ("outgoing_enabled", "启用",       "checkbox", ("outgoing", "enabled"),     ""),
+    ("outgoing_dial",    "默认呼叫号",  "text",     ("outgoing", "dial_number"), "例如 <dial-number>"),
+    ("outgoing_mcu",     "MCU 直连 IP", "text",     ("outgoing", "mcu_host"),    "留空走 GK 路由"),
+
+    # ── 视频录制质量 ─────────────────────────────────────────────
+    ("__group_video", "视频录制", None, None, None),
+    ("video_width",   "视频宽度",         "int", ("recorder", "video_width"),   "默认 1920"),
+    ("video_height",  "视频高度",         "int", ("recorder", "video_height"),  "默认 1080"),
+    ("video_fps",     "帧率 FPS",         "int", ("recorder", "video_fps"),     "默认 30"),
+    ("video_bitrate", "视频比特率 (bps)", "int", ("recorder", "video_bitrate"), "默认 2000000"),
+
+    # ── 音频录制质量 ─────────────────────────────────────────────
+    ("__group_audio", "音频录制", None, None, None),
+    ("audio_bitrate", "音频比特率 (bps)", "int",   ("recorder", "audio_bitrate"), "推荐 128000"),
+    ("audio_gain",    "音量增益倍数",     "float", ("recorder", "audio_gain"),    "1.00 原始 / 1.10 提亮 +0.83 dB / 2.0=+6 dB"),
+
+    # ── 直播推流 ─────────────────────────────────────────────────
+    ("__group_stream", "直播推流（SRS）", None, None, None),
+    ("stream_enabled",  "启用直播",     "checkbox", ("streaming", "enabled"),  ""),
+    ("stream_push_aux", "包含辅流（演示）", "checkbox", ("streaming", "push_aux"), ""),
+
+    # ── 杂项 ────────────────────────────────────────────────────
+    ("__group_misc", "其它", None, None, None),
+    ("auto_send_video", "自动发送主流视频（测试用）", "checkbox", ("auto_send_video",), "建立通话后立即推屏保画面"),
+    ("log_level",       "日志级别",                  "select",   ("log_level",),       ["trace", "debug", "info", "warn", "error"]),
+]
+
+
+def _get_path(cfg, path):
+    cur = cfg
+    for k in path:
+        if not isinstance(cur, dict) or k not in cur:
+            return None
+        cur = cur[k]
+    return cur
+
+
+def _set_path(cfg, path, value):
+    cur = cfg
+    for k in path[:-1]:
+        if k not in cur or not isinstance(cur[k], dict):
+            cur[k] = {}
+        cur = cur[k]
+    cur[path[-1]] = value
+
+
+def _coerce(typ, raw, options=None):
+    """Form 字符串转目标类型；失败返回 None + 错误消息。"""
+    try:
+        if typ == "text":
+            return raw, None
+        if typ == "password":
+            return raw, None
+        if typ == "int":
+            return int(raw), None
+        if typ == "float":
+            return float(raw), None
+        if typ == "checkbox":
+            return (raw == "on"), None
+        if typ == "select":
+            if options and raw not in options:
+                return None, f"非法选项: {raw}"
+            return raw, None
+    except ValueError as e:
+        return None, str(e)
+    return raw, None
+
+
+def _build_field_view(cfg):
+    """填出当前值，渲染用。"""
+    out = []
+    for name, label, typ, path, extra in EDITABLE_FIELDS:
+        if name.startswith("__group_"):
+            out.append({"group": label})
+            continue
+        cur = _get_path(cfg, path)
+        item = {
+            "name": name, "label": label, "type": typ,
+            "value": cur if cur is not None else "",
+            "extra": extra,
+        }
+        if typ == "checkbox":
+            item["checked"] = bool(cur)
+        if typ == "select":
+            item["options"] = extra or []
+        if typ == "password":
+            # 不回显原密码，仅以 placeholder 提示是否已设
+            item["value"] = ""
+            item["has_value"] = bool(cur)
+        out.append(item)
+    return out
+
+
 @app.route("/config")
 @login_required
 def config_page():
-    """读 /opt/recorder/config/config.json 原文交给前端 textarea 编辑。
-    若文件不存在或无权限，回退到 9001 的只读视图。"""
-    raw = ""
+    """字段化编辑：仅暴露常用项；其它字段透明保留。"""
     err = None
-    runtime_view = None
+    raw_text = ""
+    cfg = {}
     try:
-        raw = Path(CONFIG_PATH).read_text(encoding="utf-8")
-    except OSError as e:
-        err = f"读 {CONFIG_PATH} 失败: {e} （走 9001 只读）"
-        runtime_view = client.config()
+        raw_text = Path(CONFIG_PATH).read_text(encoding="utf-8")
+        cfg = json.loads(raw_text)
+    except (OSError, json.JSONDecodeError) as e:
+        err = f"读 {CONFIG_PATH} 失败: {e}"
+    fields = _build_field_view(cfg) if not err else []
     return render_template(
         "config.html",
-        raw=raw, err=err, runtime_view=runtime_view,
+        fields=fields, err=err, raw_text=raw_text,
         config_path=CONFIG_PATH,
     )
 
@@ -146,19 +255,67 @@ def config_page():
 @app.route("/config/save", methods=["POST"])
 @login_required
 def config_save():
-    """把表单提交的 JSON 文本写回 config.json。
-    校验：必须是合法 JSON object。失败时仅返回错误，不动文件。"""
+    """字段化保存：read - merge - write。
+    - 读完整 JSON
+    - 仅覆盖 EDITABLE_FIELDS 中列出的路径
+    - password 留空表示不修改
+    - checkbox 不在 form 中表示 false
+    其它任何字段一律不动，避免遗漏次要键导致 recorder 异常。
+    """
+    try:
+        cfg = json.loads(Path(CONFIG_PATH).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        flash(f"读现有配置失败：{e}", "error")
+        return redirect(url_for("config_page"))
+
+    errors = []
+    for name, label, typ, path, extra in EDITABLE_FIELDS:
+        if name.startswith("__group_"):
+            continue
+        # checkbox 不在 form 时视为 false
+        raw = request.form.get(name, "" if typ != "checkbox" else "")
+        # password 留空 = 不修改
+        if typ == "password" and raw == "":
+            continue
+        value, err = _coerce(typ, raw, extra if typ == "select" else None)
+        if err:
+            errors.append(f"{label}: {err}")
+            continue
+        _set_path(cfg, path, value)
+
+    if errors:
+        flash("保存失败：\n" + "\n".join(errors), "error")
+        return redirect(url_for("config_page"))
+
+    try:
+        tmp = CONFIG_PATH + ".tmp"
+        Path(tmp).write_text(
+            json.dumps(cfg, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(tmp, CONFIG_PATH)
+    except OSError as e:
+        flash(f"写文件失败：{e}", "error")
+        return redirect(url_for("config_page"))
+
+    flash("配置已保存。改动需重启 recorder-core 才生效（点下方按钮）", "info")
+    return redirect(url_for("config_page"))
+
+
+@app.route("/config/save_advanced", methods=["POST"])
+@login_required
+def config_save_advanced():
+    """高级模式：直接 textarea 改 JSON 全文（保留原 textarea 入口作后备）。"""
     text = request.form.get("payload", "")
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as e:
-        flash(f"JSON 解析失败：{e}", "error")
+        flash(f"高级模式 JSON 解析失败：{e}", "error")
         return redirect(url_for("config_page"))
     if not isinstance(parsed, dict):
         flash("JSON 顶层必须是对象 {}", "error")
         return redirect(url_for("config_page"))
     try:
-        # 写临时文件再 rename — 写一半断电不会破坏原文件
         tmp = CONFIG_PATH + ".tmp"
         Path(tmp).write_text(
             json.dumps(parsed, indent=2, ensure_ascii=False) + "\n",
@@ -168,7 +325,7 @@ def config_save():
     except OSError as e:
         flash(f"写文件失败：{e}", "error")
         return redirect(url_for("config_page"))
-    flash("配置已保存。改动需重启 recorder-core 才生效（点下方按钮）", "info")
+    flash("高级模式：完整 JSON 已保存。改动需重启 recorder-core", "info")
     return redirect(url_for("config_page"))
 
 

@@ -1,24 +1,55 @@
 {% extends "base.html" %}
 {% block title %}配置 — Recorder Admin{% endblock %}
 {% block body %}
-<h2>运行配置</h2>
-<p class="muted">编辑 <code>{{ config_path }}</code>，保存后点击"重启 recorder-core"使其生效。</p>
+<h2>配置</h2>
+<p class="muted">编辑 <code>{{ config_path }}</code>。仅常用参数显示在下方，其它键保存时不会被改动。<br>
+保存后需点击底部"重启 recorder-core"才会生效。</p>
 
 {% if err %}
-<div class="flash flash-error">{{ err }}</div>
-{% if runtime_view and runtime_view.ok %}
-<details>
-  <summary>运行时只读视图（来自 9001）</summary>
-  <pre class="cfg-pre">{{ runtime_view.data | tojson(indent=2) }}</pre>
-</details>
-{% endif %}
+  <div class="flash flash-error">{{ err }}</div>
 {% else %}
 
-<form method="post" action="{{ url_for('config_save') }}" class="cfg-form" id="cfg-form">
-  <textarea name="payload" id="cfg-payload" spellcheck="false">{{ raw }}</textarea>
-  <div class="cfg-bar">
-    <button type="submit" class="btn btn-primary">保存</button>
-    <span class="cfg-hint" id="cfg-hint">仅校验 JSON 语法 — 不同字段是否生效以 recorder-core 为准</span>
+<form method="post" action="{{ url_for('config_save') }}" class="settings-form">
+  {% for f in fields %}
+    {% if f.group %}
+      <h3 class="settings-group">{{ f.group }}</h3>
+    {% else %}
+      <div class="settings-row">
+        <label class="settings-label" for="f-{{f.name}}">{{ f.label }}</label>
+        <div class="settings-control">
+          {% if f.type == "checkbox" %}
+            <label class="switch">
+              <input type="checkbox" id="f-{{f.name}}" name="{{f.name}}" {% if f.checked %}checked{% endif %}>
+              <span class="switch-slider"></span>
+            </label>
+          {% elif f.type == "select" %}
+            <select id="f-{{f.name}}" name="{{f.name}}">
+              {% for opt in f.options %}
+                <option value="{{opt}}" {% if f.value == opt %}selected{% endif %}>{{opt}}</option>
+              {% endfor %}
+            </select>
+          {% elif f.type == "password" %}
+            <input type="password" id="f-{{f.name}}" name="{{f.name}}"
+                   placeholder="{% if f.has_value %}******（已设，留空保留）{% else %}（未设）{% endif %}">
+          {% elif f.type == "int" or f.type == "float" %}
+            <input type="number" id="f-{{f.name}}" name="{{f.name}}"
+                   value="{{ f.value }}"
+                   {% if f.type == "float" %}step="0.01"{% endif %}
+                   inputmode="{% if f.type == 'float' %}decimal{% else %}numeric{% endif %}">
+          {% else %}
+            <input type="text" id="f-{{f.name}}" name="{{f.name}}" value="{{ f.value }}">
+          {% endif %}
+          {% if f.extra and f.type != "select" %}
+            <div class="settings-hint">{{ f.extra }}</div>
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
+  {% endfor %}
+
+  <div class="settings-bar">
+    <button type="submit" class="btn btn-primary">保存常用配置</button>
+    <a href="{{ url_for('config_page') }}" class="btn btn-link">放弃修改</a>
   </div>
 </form>
 
@@ -28,33 +59,28 @@
   <span class="muted">通过 systemctl 重启，约 1–2 秒。重启不影响 web 管理页和直播服务。</span>
 </form>
 
-{% endif %}
+<details class="advanced-mode">
+  <summary>高级模式：直接编辑完整 JSON</summary>
+  <p class="muted">仅在需要改动未在上方显示的字段时使用。整段 JSON 会替换当前文件内容。</p>
+  <form method="post" action="{{ url_for('config_save_advanced') }}">
+    <textarea name="payload" id="cfg-payload" spellcheck="false">{{ raw_text }}</textarea>
+    <div class="cfg-bar">
+      <button type="submit" class="btn btn-primary">保存（覆盖整个文件）</button>
+      <span class="cfg-hint" id="cfg-hint">输入后会校验 JSON 合法性</span>
+    </div>
+  </form>
+</details>
 
 <script>
-  // 保存前在前端再校验一遍 JSON，避免无谓的网络往返
-  const form = document.getElementById('cfg-form');
-  const ta   = document.getElementById('cfg-payload');
+  const ta = document.getElementById('cfg-payload');
   const hint = document.getElementById('cfg-hint');
-  if (form) {
-    form.addEventListener('submit', (ev) => {
-      try {
-        JSON.parse(ta.value);
-      } catch (e) {
-        ev.preventDefault();
-        hint.textContent = 'JSON 解析错误：' + e.message;
-        hint.style.color = '#dc2626';
-      }
-    });
+  if (ta) {
     ta.addEventListener('input', () => {
-      try {
-        JSON.parse(ta.value);
-        hint.textContent = '✓ JSON 合法';
-        hint.style.color = '#059669';
-      } catch (e) {
-        hint.textContent = '× ' + e.message;
-        hint.style.color = '#dc2626';
-      }
+      try { JSON.parse(ta.value); hint.textContent = '✓ JSON 合法'; hint.style.color = '#059669'; }
+      catch (e) { hint.textContent = '× ' + e.message; hint.style.color = '#dc2626'; }
     });
   }
 </script>
+
+{% endif %}
 {% endblock %}
