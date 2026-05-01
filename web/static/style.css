@@ -310,3 +310,9 @@ canvas    { background: #11141a; border-radius: 4px; }
   opacity: 0.4;
   cursor: not-allowed;
 }
+.sync-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: 12px; cursor: pointer; user-select: none;
+  color: #1f2937; font-size: 13px;
+}
+.sync-toggle input { cursor: pointer; }

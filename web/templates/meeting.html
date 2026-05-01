@@ -50,6 +50,12 @@
     <button type="button" id="swap-btn" class="btn btn-link" disabled
             title="把当前小窗 / 右侧画面提到大画面 / 左侧">⇄ 主画面切换</button>
     {% endif %}
+    {% if aux_segments and meeting_t0_ms %}
+    <label class="sync-toggle" title="按 meeting.json 的 wall_start_ms 把辅流定位到主流对应时刻">
+      <input type="checkbox" id="sync-toggle" checked>
+      <span>主辅流同步</span>
+    </label>
+    {% endif %}
   </div>
 </div>
 
@@ -63,6 +69,7 @@
 <script>
   window.MAIN_SEGMENTS = {{ main_segments | tojson }};
   window.AUX_SEGMENTS  = {{ aux_segments  | tojson }};
+  window.MEETING_T0_MS = {{ meeting_t0_ms | tojson }};
 </script>
 <script src="{{ url_for('static', filename='player.js') }}"></script>
 {% endif %}

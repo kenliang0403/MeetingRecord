@@ -437,33 +437,53 @@ def meeting_page(meeting_dir):
         except (IndexError, ValueError):
             return 0
 
+    # 读 meeting.json 拿每段的 wall_start_ms / duration_ms（用于双流时间同步）
+    meeting_json = None
+    seg_meta = {}  # 文件名 → {wall_start_ms, duration_ms}
+    j = target / "meeting.json"
+    if j.exists():
+        try:
+            meeting_json = json.loads(j.read_text(encoding="utf-8"))
+            for s in (meeting_json or {}).get("segments", []) or []:
+                fname = s.get("file")
+                if fname:
+                    seg_meta[fname] = s
+        except Exception:
+            pass
+
     def _make_segments(prefix):
         segs = []
         for f in sorted(target.iterdir(), key=lambda p: _sort_key(p.name)):
             if f.is_file() and f.suffix == ".mp4" and f.name.startswith(prefix):
+                meta = seg_meta.get(f.name, {})
                 segs.append({
-                    "name": f.name,
-                    "url":  url_for("play_file", meeting_dir=meeting_dir, fname=f.name),
-                    "size_mb": round(f.stat().st_size / (1024 * 1024), 1),
+                    "name":          f.name,
+                    "url":           url_for("play_file", meeting_dir=meeting_dir, fname=f.name),
+                    "size_mb":       round(f.stat().st_size / (1024 * 1024), 1),
+                    "wall_start_ms": meta.get("wall_start_ms"),
+                    "duration_ms":   meta.get("duration_ms"),
                 })
         return segs
 
     main_segments = _make_segments("main_")
     aux_segments  = _make_segments("aux_")
 
-    meeting_json = None
-    j = target / "meeting.json"
-    if j.exists():
-        try:
-            meeting_json = json.loads(j.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+    # 计算 meeting timeline 起点 T0（取最早一段 main 的 wall_start_ms）
+    main_starts = [s["wall_start_ms"] for s in main_segments if s["wall_start_ms"]]
+    t0 = min(main_starts) if main_starts else None
+    if t0 is not None:
+        for s in main_segments + aux_segments:
+            if s["wall_start_ms"] is not None:
+                s["meeting_offset_ms"] = s["wall_start_ms"] - t0
+            else:
+                s["meeting_offset_ms"] = None
 
     return render_template(
         "meeting.html",
         meeting_dir=meeting_dir,
         main_segments=main_segments,
         aux_segments=aux_segments,
+        meeting_t0_ms=t0,
         meeting_json=meeting_json,
     )
 
