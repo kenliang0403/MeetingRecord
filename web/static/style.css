@@ -191,3 +191,122 @@ canvas    { background: #11141a; border-radius: 4px; }
   cursor: pointer; color: #2563eb; font-size: 14px; padding: 6px 0;
 }
 .advanced-mode summary:hover { color: #1d4ed8; }
+
+/* ── 回放页：单 stage 双 video 多布局 ───────────────────────────── */
+.play-stage {
+  position: relative;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 12px;
+  width: 100%;
+  /* 16:9 占位 — 让画面始终保持比例 */
+  aspect-ratio: 16 / 9;
+}
+.play-stage video {
+  background: #000;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* 仅主流：primary 全屏，secondary 隐藏 */
+.play-stage.layout-main-only #vid-secondary,
+.play-stage.layout-aux-only  #vid-secondary {
+  display: none;
+}
+.play-stage.layout-main-only #vid-primary,
+.play-stage.layout-aux-only  #vid-primary {
+  position: absolute;
+  inset: 0;
+}
+
+/* 画中画：primary 全屏，secondary 右下角小窗 30% */
+.play-stage.layout-pip #vid-primary {
+  position: absolute;
+  inset: 0;
+}
+.play-stage.layout-pip #vid-secondary {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  width: 28%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border: 2px solid #fff;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.4);
+  z-index: 2;
+  cursor: pointer;
+}
+
+/* 左右分屏：50% / 50% */
+.play-stage.layout-split {
+  display: flex;
+  gap: 4px;
+  background: #000;
+}
+.play-stage.layout-split #vid-primary,
+.play-stage.layout-split #vid-secondary {
+  position: relative;
+  width: 50%;
+  height: 100%;
+  flex: 1 1 50%;
+}
+
+.play-bar {
+  background: #fff;
+  border-radius: 8px;
+  padding: 12px 16px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.06);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.play-bar-row {
+  display: flex; align-items: center; gap: 12px;
+  font-size: 14px;
+  flex-wrap: wrap;
+}
+.play-bar-title {
+  display: inline-block;
+  min-width: 56px;
+  color: #6b7280;
+  font-size: 13px;
+  font-weight: 500;
+}
+.seg-indicator {
+  font-variant-numeric: tabular-nums;
+  color: #1f2937;
+  min-width: 90px;
+}
+.play-bar-name {
+  color: #6b7280;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin-left: auto;
+}
+.play-bar select {
+  padding: 5px 8px;
+  border: 1px solid #d0d4dc;
+  border-radius: 4px;
+  font-size: 14px;
+  background: #fff;
+}
+.play-bar .btn-link {
+  padding: 4px 10px;
+  border: 1px solid #d0d4dc;
+  border-radius: 4px;
+  background: #f9fafb;
+  cursor: pointer;
+  font-size: 13px;
+  color: #1f2937;
+}
+.play-bar .btn-link:hover:not(:disabled) {
+  background: #e5e7eb;
+  color: #111;
+}
+.play-bar .btn-link:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

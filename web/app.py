@@ -430,20 +430,30 @@ def meeting_page(meeting_dir):
     if not target.exists():
         abort(404)
 
-    files = sorted(
-        [f.name for f in target.iterdir() if f.suffix == ".mp4"],
-        key=lambda n: (
-            0 if n.startswith("main_") else 1 if n.startswith("aux_") else 2,
-            n,
-        ),
-    )
-    main_files = [f for f in files if f.startswith("main_")]
-    aux_files  = [f for f in files if f.startswith("aux_")]
+    def _sort_key(name):
+        # main_NN.mp4 / aux_NN.mp4 — 取 NN 数字部分排序
+        try:
+            return int(name.split("_", 1)[1].split(".", 1)[0])
+        except (IndexError, ValueError):
+            return 0
+
+    def _make_segments(prefix):
+        segs = []
+        for f in sorted(target.iterdir(), key=lambda p: _sort_key(p.name)):
+            if f.is_file() and f.suffix == ".mp4" and f.name.startswith(prefix):
+                segs.append({
+                    "name": f.name,
+                    "url":  url_for("play_file", meeting_dir=meeting_dir, fname=f.name),
+                    "size_mb": round(f.stat().st_size / (1024 * 1024), 1),
+                })
+        return segs
+
+    main_segments = _make_segments("main_")
+    aux_segments  = _make_segments("aux_")
 
     meeting_json = None
     j = target / "meeting.json"
     if j.exists():
-        import json
         try:
             meeting_json = json.loads(j.read_text(encoding="utf-8"))
         except Exception:
@@ -452,8 +462,8 @@ def meeting_page(meeting_dir):
     return render_template(
         "meeting.html",
         meeting_dir=meeting_dir,
-        main_files=main_files,
-        aux_files=aux_files,
+        main_segments=main_segments,
+        aux_segments=aux_segments,
         meeting_json=meeting_json,
     )
 

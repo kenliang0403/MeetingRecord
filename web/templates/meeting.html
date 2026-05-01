@@ -1,39 +1,69 @@
 {% extends "base.html" %}
-{% block title %}{{ meeting_dir }} — Recorder Admin{% endblock %}
+{% block title %}{{ meeting_dir }} — 回放{% endblock %}
 {% block body %}
 <p><a href="{{ url_for('recordings_page') }}">← 返回列表</a></p>
-<h2>{{ meeting_dir }}</h2>
+<h2>{{ meeting_dir }}
+  {% if meeting_json and meeting_json.meeting_name %}
+    <small>{{ meeting_json.meeting_name }}</small>
+  {% endif %}
+</h2>
 
-{% if main_files %}
-<h3>主流（{{ main_files|length }}）</h3>
-<div class="player-grid">
-  {% for f in main_files %}
-  <div class="card">
-    <div class="muted">{{ f }}</div>
-    <video controls preload="metadata" src="{{ url_for('play_file', meeting_dir=meeting_dir, fname=f) }}"></video>
-  </div>
-  {% endfor %}
+{% if not main_segments and not aux_segments %}
+  <p class="muted">该会议目录下未发现 mp4 文件。</p>
+{% else %}
+
+<div class="play-stage" id="stage">
+  <video id="vid-primary"   controls playsinline preload="metadata"></video>
+  <video id="vid-secondary"          playsinline preload="metadata"></video>
 </div>
-{% endif %}
 
-{% if aux_files %}
-<h3 class="mt">辅流（{{ aux_files|length }}）</h3>
-<div class="player-grid">
-  {% for f in aux_files %}
-  <div class="card">
-    <div class="muted">{{ f }}</div>
-    <video controls preload="metadata" src="{{ url_for('play_file', meeting_dir=meeting_dir, fname=f) }}"></video>
+<div class="play-bar">
+  <div class="play-bar-row">
+    <span class="play-bar-title">主流</span>
+    <button type="button" id="main-prev" class="btn btn-link">上一段</button>
+    <span class="seg-indicator" id="main-indicator">—</span>
+    <button type="button" id="main-next" class="btn btn-link">下一段</button>
+    <span class="play-bar-name" id="main-name">—</span>
   </div>
-  {% endfor %}
-</div>
-{% endif %}
 
-{% if not main_files and not aux_files %}
-<p>该会议无 mp4 文件。</p>
-{% endif %}
+  {% if aux_segments %}
+  <div class="play-bar-row">
+    <span class="play-bar-title">辅流</span>
+    <button type="button" id="aux-prev" class="btn btn-link">上一段</button>
+    <span class="seg-indicator" id="aux-indicator">—</span>
+    <button type="button" id="aux-next" class="btn btn-link">下一段</button>
+    <span class="play-bar-name" id="aux-name">—</span>
+  </div>
+  {% endif %}
+
+  <div class="play-bar-row">
+    <span class="play-bar-title">布局</span>
+    <select id="layout-mode">
+      <option value="main-only">仅主流</option>
+      {% if aux_segments %}
+        <option value="aux-only">仅辅流</option>
+        <option value="pip">画中画（辅流叠在主流上）</option>
+        <option value="split">左右分屏</option>
+      {% endif %}
+    </select>
+    {% if aux_segments %}
+    <button type="button" id="swap-btn" class="btn btn-link" disabled
+            title="把当前小窗 / 右侧画面提到大画面 / 左侧">⇄ 主画面切换</button>
+    {% endif %}
+  </div>
+</div>
 
 {% if meeting_json %}
-<h3 class="mt">meeting.json</h3>
-<pre class="cfg-pre">{{ meeting_json | tojson(indent=2) }}</pre>
+<details class="advanced-mode">
+  <summary>meeting.json</summary>
+  <pre class="cfg-pre">{{ meeting_json | tojson(indent=2) }}</pre>
+</details>
+{% endif %}
+
+<script>
+  window.MAIN_SEGMENTS = {{ main_segments | tojson }};
+  window.AUX_SEGMENTS  = {{ aux_segments  | tojson }};
+</script>
+<script src="{{ url_for('static', filename='player.js') }}"></script>
 {% endif %}
 {% endblock %}
