@@ -88,3 +88,27 @@ canvas    { background: #11141a; border-radius: 4px; }
 .rec-tbl th { background: #f3f4f6; color: #555; font-weight: 500; }
 .rec-tbl a  { color: #2563eb; text-decoration: none; }
 .rec-tbl a:hover { text-decoration: underline; }
+.rec-tbl td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* config editor */
+.cfg-form { margin-bottom: 16px; }
+#cfg-payload {
+  width: 100%; min-height: 480px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px; line-height: 1.45; padding: 12px;
+  border: 1px solid #d0d4dc; border-radius: 6px; background: #fff;
+  resize: vertical;
+}
+.cfg-bar { display: flex; align-items: center; gap: 14px; margin-top: 10px; }
+.cfg-hint { color: #6b7280; font-size: 13px; }
+
+.btn {
+  padding: 8px 18px; border: none; border-radius: 4px;
+  font-size: 14px; cursor: pointer;
+}
+.btn-primary { background: #2563eb; color: #fff; }
+.btn-primary:hover { background: #1d4ed8; }
+.btn-danger  { background: #dc2626; color: #fff; }
+.btn-danger:hover  { background: #b91c1c; }
+
+.restart-form { margin-top: 28px; padding-top: 20px; border-top: 1px solid #e5e7eb;
+                display: flex; align-items: center; gap: 14px; }

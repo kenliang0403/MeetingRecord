@@ -1,11 +1,60 @@
 {% extends "base.html" %}
 {% block title %}配置 — Recorder Admin{% endblock %}
 {% block body %}
-<h2>运行配置 <small>（只读）</small></h2>
-{% if cfg.ok %}
-<pre class="cfg-pre">{{ cfg.data | tojson(indent=2) }}</pre>
-<p class="muted">敏感字段（密码等）已经在服务端 mask 为 ***。要修改请在服务器上编辑 <code>/opt/recorder/config/config.json</code> 后重启进程。</p>
-{% else %}
-<div class="flash flash-error">读配置失败：{{ cfg.error }}</div>
+<h2>运行配置</h2>
+<p class="muted">编辑 <code>{{ config_path }}</code>，保存后点击"重启 recorder-core"使其生效。</p>
+
+{% if err %}
+<div class="flash flash-error">{{ err }}</div>
+{% if runtime_view and runtime_view.ok %}
+<details>
+  <summary>运行时只读视图（来自 9001）</summary>
+  <pre class="cfg-pre">{{ runtime_view.data | tojson(indent=2) }}</pre>
+</details>
 {% endif %}
+{% else %}
+
+<form method="post" action="{{ url_for('config_save') }}" class="cfg-form" id="cfg-form">
+  <textarea name="payload" id="cfg-payload" spellcheck="false">{{ raw }}</textarea>
+  <div class="cfg-bar">
+    <button type="submit" class="btn btn-primary">保存</button>
+    <span class="cfg-hint" id="cfg-hint">仅校验 JSON 语法 — 不同字段是否生效以 recorder-core 为准</span>
+  </div>
+</form>
+
+<form method="post" action="{{ url_for('config_restart') }}" class="restart-form"
+      onsubmit="return confirm('确定要重启 recorder-core 服务吗？正在进行的录像会被中断。');">
+  <button type="submit" class="btn btn-danger">重启 recorder-core</button>
+  <span class="muted">通过 systemctl 重启，约 1–2 秒。重启不影响 web 管理页和直播服务。</span>
+</form>
+
+{% endif %}
+
+<script>
+  // 保存前在前端再校验一遍 JSON，避免无谓的网络往返
+  const form = document.getElementById('cfg-form');
+  const ta   = document.getElementById('cfg-payload');
+  const hint = document.getElementById('cfg-hint');
+  if (form) {
+    form.addEventListener('submit', (ev) => {
+      try {
+        JSON.parse(ta.value);
+      } catch (e) {
+        ev.preventDefault();
+        hint.textContent = 'JSON 解析错误：' + e.message;
+        hint.style.color = '#dc2626';
+      }
+    });
+    ta.addEventListener('input', () => {
+      try {
+        JSON.parse(ta.value);
+        hint.textContent = '✓ JSON 合法';
+        hint.style.color = '#059669';
+      } catch (e) {
+        hint.textContent = '× ' + e.message;
+        hint.style.color = '#dc2626';
+      }
+    });
+  }
+</script>
 {% endblock %}

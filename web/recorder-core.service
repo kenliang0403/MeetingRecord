@@ -1,0 +1,23 @@
+[Unit]
+Description=H.323 recorder-core
+After=network.target
+
+[Service]
+Type=simple
+User=ftadmin
+WorkingDirectory=/home/ftadmin
+# start.sh sets LD_LIBRARY_PATH for gcc-toolset-12 and PTLIBPLUGINDIR
+ExecStart=/bin/bash /opt/recorder/scripts/start-foreground.sh
+Restart=on-failure
+RestartSec=3
+# recorder-core 的 SIGTERM handler 现在不能干净退出主线程，
+# 给个 3 秒上限，超时 systemd SIGKILL 整个 cgroup。
+TimeoutStopSec=3
+KillMode=mixed
+KillSignal=SIGTERM
+# log goes to journal; stdout.log left untouched for back-compat
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
