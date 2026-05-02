@@ -195,18 +195,64 @@
     }
   }
 
+  // --- 跳转到某 aux 段对应的主流时刻 ------------------------------
+  // 同步开启时点辅流"上/下一段" → 把主流 seek 到 AUX[idx].meeting_offset_ms。
+  // sync 逻辑（主流 timeupdate）会自动把辅流定位到正确位置。
+  // 这相当于把辅流按钮当成"时间轴书签"使用。
+  function jumpMainToAuxStart(auxIdx) {
+    if (auxIdx < 0 || auxIdx >= AUX.length) return;
+    const aux = AUX[auxIdx];
+    if (!aux || aux.meeting_offset_ms == null) return;
+    const t = aux.meeting_offset_ms;     // 目标 meeting time (ms)
+
+    // 找包含 t 的 main 段
+    for (let i = 0; i < MAIN.length; i++) {
+      const m = MAIN[i];
+      if (m.meeting_offset_ms == null || m.duration_ms == null) continue;
+      const start = m.meeting_offset_ms;
+      const end   = m.meeting_offset_ms + m.duration_ms;
+      if (t >= start && t < end) {
+        const mv = sources.main.video;
+        const offSec = (t - start) / 1000;
+        if (sources.main.idx !== i) {
+          // 切主流段
+          sources.main.idx = i;
+          mv.src = m.url;
+          mv.addEventListener('loadedmetadata', () => {
+            try { mv.currentTime = offSec; } catch (_) {}
+            mv.play().catch(() => {});
+          }, { once: true });
+          sources.main.indicator.textContent = `片段 ${i + 1} / ${MAIN.length}`;
+          sources.main.nameEl.textContent    = `${m.name} · ${m.size_mb} MB`;
+        } else {
+          // 同段，直接 seek
+          try { mv.currentTime = offSec; } catch (_) {}
+          mv.play().catch(() => {});
+        }
+        return;
+      }
+    }
+    // 极端情况：aux.meeting_offset_ms 不在任何 main 段内（通话间歇期录到 aux？罕见）
+    // 退化为直接切 aux，并暂停 sync 一会儿避免立刻被拉回
+    auxTouchUntil = Date.now() + 5000;
+    loadSegment('aux', auxIdx, true);
+  }
+
   // --- 按钮事件 ----------------------------------------------------
   function wireSegmentButtons(srcKey) {
     const s = sources[srcKey];
     if (!s) return;
-    if (s.prevBtn) s.prevBtn.addEventListener('click', () => {
-      if (srcKey === 'aux') auxTouchUntil = Date.now() + 5000;   // 用户主动操作 aux：暂停 sync 5s
-      loadSegment(srcKey, s.idx - 1, true);
-    });
-    if (s.nextBtn) s.nextBtn.addEventListener('click', () => {
-      if (srcKey === 'aux') auxTouchUntil = Date.now() + 5000;
-      loadSegment(srcKey, s.idx + 1, true);
-    });
+    function handleStep(delta) {
+      if (srcKey === 'aux' && syncEnabled) {
+        // 同步开启：辅流按钮当作"跳转到对应主流时刻"用
+        jumpMainToAuxStart(s.idx + delta);
+      } else {
+        if (srcKey === 'aux') auxTouchUntil = Date.now() + 5000;
+        loadSegment(srcKey, s.idx + delta, true);
+      }
+    }
+    if (s.prevBtn) s.prevBtn.addEventListener('click', () => handleStep(-1));
+    if (s.nextBtn) s.nextBtn.addEventListener('click', () => handleStep(+1));
   }
   wireSegmentButtons('main');
   wireSegmentButtons('aux');
@@ -233,13 +279,23 @@
   if (swapBtn) swapBtn.addEventListener('click', swapPrimary);
 
   const syncToggle = document.getElementById('sync-toggle');
+  const auxHint    = document.getElementById('aux-hint');
+  function refreshAuxHint() {
+    if (!auxHint) return;
+    auxHint.textContent = syncEnabled
+      ? '已开启同步：辅流按钮跳到对应主流时刻'
+      : '已关闭同步：辅流独立播放';
+  }
   if (syncToggle) {
     syncToggle.addEventListener('change', () => {
       syncEnabled = syncToggle.checked;
+      refreshAuxHint();
     });
+    refreshAuxHint();
   } else {
     // 没有同步开关（无 aux 或无 timing meta）→ 永久关 sync
     syncEnabled = false;
+    if (auxHint) auxHint.textContent = '';
   }
 
   // 主流 timeupdate（每 ~250ms 触发一次）→ 同步辅流
