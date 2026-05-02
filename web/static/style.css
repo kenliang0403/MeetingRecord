@@ -316,3 +316,99 @@ canvas    { background: #11141a; border-radius: 4px; }
   color: #1f2937; font-size: 13px;
 }
 .sync-toggle input { cursor: pointer; }
+
+/* segmented button group (iOS/macOS-style) */
+.layout-segments {
+  display: inline-flex;
+  background: #e5e7eb;
+  border-radius: 7px;
+  padding: 3px;
+  gap: 2px;
+}
+.layout-segments button {
+  border: none;
+  background: transparent;
+  padding: 6px 14px;
+  font-size: 13px;
+  border-radius: 5px;
+  cursor: pointer;
+  color: #4b5563;
+  transition: background 0.12s, color 0.12s;
+  white-space: nowrap;
+}
+.layout-segments button:hover:not(.active) {
+  color: #1f2937;
+  background: rgba(255,255,255,.5);
+}
+.layout-segments button.active {
+  background: #fff;
+  color: #1f2937;
+  box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 0 0 0.5px rgba(0,0,0,.04);
+  font-weight: 500;
+}
+
+/* playlists (回放页主流/辅流片段列表) */
+.playlists {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 14px;
+}
+.playlists.single { grid-template-columns: 1fr; }
+.playlist {
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.06);
+  padding: 12px 14px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.playlist h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #6b7280;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  position: sticky; top: 0;
+  background: #fff;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #f3f4f6;
+}
+.playlist ul {
+  list-style: none; margin: 0; padding: 0;
+}
+.playlist-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #1f2937;
+}
+.playlist-item:hover { background: #f3f4f6; }
+.playlist-item.active {
+  background: #dbeafe;
+  color: #1e3a8a;
+  font-weight: 500;
+}
+.playlist-item .pl-idx {
+  color: #6b7280;
+  min-width: 26px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.playlist-item.active .pl-idx { color: #1e3a8a; }
+.playlist-item .pl-name {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.playlist-item .pl-size {
+  color: #6b7280;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.playlist-item.active .pl-size { color: #1e40af; }

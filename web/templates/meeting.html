@@ -19,47 +19,58 @@
 
 <div class="play-bar">
   <div class="play-bar-row">
-    <span class="play-bar-title">主流</span>
-    <button type="button" id="main-prev" class="btn btn-link">上一段</button>
-    <span class="seg-indicator" id="main-indicator">—</span>
-    <button type="button" id="main-next" class="btn btn-link">下一段</button>
-    <span class="play-bar-name" id="main-name">—</span>
-  </div>
-
-  {% if aux_segments %}
-  <div class="play-bar-row">
-    <span class="play-bar-title">辅流</span>
-    <button type="button" id="aux-prev" class="btn btn-link">上一段</button>
-    <span class="seg-indicator" id="aux-indicator">—</span>
-    <button type="button" id="aux-next" class="btn btn-link">下一段</button>
-    <span class="play-bar-name" id="aux-name">—</span>
-    <span class="muted" style="margin-left:auto; font-size:12px;" id="aux-hint">
-      已开启同步：辅流按钮跳到对应主流时刻
-    </span>
-  </div>
-  {% endif %}
-
-  <div class="play-bar-row">
     <span class="play-bar-title">布局</span>
-    <select id="layout-mode">
-      <option value="main-only">仅主流</option>
+    <div class="layout-segments" id="layout-segments">
+      <button type="button" data-layout="main-only" class="active">仅主流</button>
       {% if aux_segments %}
-        <option value="aux-only">仅辅流</option>
-        <option value="pip">画中画（辅流叠在主流上）</option>
-        <option value="split">左右分屏</option>
+        <button type="button" data-layout="aux-only">仅辅流</button>
+        <button type="button" data-layout="pip">画中画</button>
+        <button type="button" data-layout="split">左右分屏</button>
       {% endif %}
-    </select>
+    </div>
+
     {% if aux_segments %}
     <button type="button" id="swap-btn" class="btn btn-link" disabled
             title="把当前小窗 / 右侧画面提到大画面 / 左侧">⇄ 主画面切换</button>
     {% endif %}
+
     {% if aux_segments and meeting_t0_ms %}
     <label class="sync-toggle" title="按 meeting.json 的 wall_start_ms 把辅流定位到主流对应时刻">
       <input type="checkbox" id="sync-toggle" checked>
       <span>主辅流同步</span>
     </label>
+    <span class="muted" id="aux-hint" style="font-size:12px;"></span>
     {% endif %}
   </div>
+</div>
+
+<div class="playlists {% if not aux_segments %}single{% endif %}">
+  <div class="playlist">
+    <h4>主流 · {{ main_segments | length }} 段</h4>
+    <ul id="main-playlist">
+      {% for seg in main_segments %}
+      <li class="playlist-item" data-source="main" data-idx="{{ loop.index0 }}">
+        <span class="pl-idx">{{ loop.index }}.</span>
+        <span class="pl-name">{{ seg.name }}</span>
+        <span class="pl-size">{{ seg.size_mb }} MB</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% if aux_segments %}
+  <div class="playlist">
+    <h4>辅流 · {{ aux_segments | length }} 段</h4>
+    <ul id="aux-playlist">
+      {% for seg in aux_segments %}
+      <li class="playlist-item" data-source="aux" data-idx="{{ loop.index0 }}">
+        <span class="pl-idx">{{ loop.index }}.</span>
+        <span class="pl-name">{{ seg.name }}</span>
+        <span class="pl-size">{{ seg.size_mb }} MB</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
 </div>
 
 {% if meeting_json %}
