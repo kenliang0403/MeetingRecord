@@ -8,6 +8,7 @@
 #include "h323/RecorderConnection.h"
 #include "meeting/MeetingRegistry.h"
 #include "media/AudioLevelMeter.h"
+#include "media/Mp4Faststart.h"
 #include "tcp/ControlServer.h"
 #include "util/Logger.h"
 #include <h323pluginmgr.h>
@@ -16,6 +17,7 @@
 #include <csignal>
 #include <atomic>
 #include <filesystem>
+#include <thread>
 #include <fstream>
 #include <nlohmann/json.hpp>
 
@@ -418,6 +420,49 @@ void RecorderApp::Main()
         bool ok = endpoint.stopPresentation();
         return nlohmann::json{{"ok", ok},
             {"message", ok ? "H.239 presentation stopped" : "stop failed — check logs"}};
+    });
+
+    // ── faststart_one: 把单个 mp4 文件原地重写为 +faststart ────────────────
+    // Usage: {"cmd":"faststart_one","path":"/opt/recorder/recordings/<m>/main_01.mp4"}
+    // 同步执行，返回 ok/error。用于 web 单点修复或脚本调用。
+    ctrlServer.registerHandler("faststart_one", [&](const nlohmann::json& req) {
+        std::string p = req.value("path", "");
+        if (p.empty())
+            return nlohmann::json{{"ok", false}, {"error", "path is required"}};
+        // 安全：路径必须在 recordings 目录内
+        std::string base = cfg.recorder.output_dir;
+        if (p.find(base) != 0 || p.find("..") != std::string::npos)
+            return nlohmann::json{{"ok", false}, {"error", "path outside recordings dir"}};
+        bool ok = faststartRewrite(p);
+        return nlohmann::json{{"ok", ok}, {"path", p}};
+    });
+
+    // ── faststart_all: 后台扫 recordings/，所有 main_*.mp4 / aux_*.mp4
+    // 串行重写。立即返回，处理在 detached thread 中进行，结果只在 log 看。
+    // Usage: {"cmd":"faststart_all"}
+    ctrlServer.registerHandler("faststart_all", [&](const nlohmann::json&) {
+        std::string base = cfg.recorder.output_dir;
+        std::thread([base]() {
+            namespace fs = std::filesystem;
+            int total = 0, ok_count = 0;
+            std::error_code ec;
+            for (auto& entry : fs::recursive_directory_iterator(base, ec)) {
+                if (ec) break;
+                if (!entry.is_regular_file()) continue;
+                auto p = entry.path();
+                if (p.extension() != ".mp4") continue;
+                auto name = p.filename().string();
+                if (name.find(".faststart.tmp") != std::string::npos) continue;
+                // 仅处理 main_/aux_ 命名的录像段；跳过散落历史文件
+                if (name.rfind("main_", 0) != 0 && name.rfind("aux_", 0) != 0)
+                    continue;
+                ++total;
+                if (faststartRewrite(p.string())) ++ok_count;
+            }
+            spdlog::info("faststart_all: done {}/{} ok", ok_count, total);
+        }).detach();
+        return nlohmann::json{{"ok", true},
+            {"message", "started; tail logs to watch progress"}};
     });
 
     if (!ctrlServer.start()) {

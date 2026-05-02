@@ -1,10 +1,12 @@
 #include "FfmpegRecorder.h"
 #include "SrsStreamer.h"
+#include "Mp4Faststart.h"
 #include <spdlog/spdlog.h>
 #include <filesystem>
 #include <stdexcept>
 #include <cstring>
 #include <cmath>
+#include <thread>
 #include <vector>
 
 extern "C" {
@@ -486,4 +488,20 @@ void FfmpegRecorder::close()
     // Intentionally NOT clearing streamer_ — owner may reopen this recorder
     // and expect the live stream to continue. Owner calls attachStreamer(nullptr)
     // to detach explicitly.
+
+    // ── 后台 faststart 重写 ──────────────────────────────────────────
+    // 已写好的 fragmented mp4 (movflags=frag_keyframe+empty_moov+...) 浏览器
+    // seek 时要扫整个文件构建 sample table，体感卡顿。
+    // 这里启个 detached thread 用 libav 把它重新 mux 成普通 mp4 + faststart：
+    // moov atom 在文件头，浏览器 seek 即时响应。
+    // - thread 内 std::system 风险：进程退出时被 cgroup KILL，tmp 文件残留
+    //   → faststartRewrite 启动时会先清理同名 .faststart.tmp
+    // - 重写期间原文件仍可访问（rename 是 atomic 替换）
+    // - 失败原文件保持不变，下次重启或手动触发再试
+    if (!outputPath_.empty()) {
+        std::string p = outputPath_;
+        std::thread([p]() {
+            faststartRewrite(p);
+        }).detach();
+    }
 }

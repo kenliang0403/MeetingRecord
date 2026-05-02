@@ -97,6 +97,7 @@ set(SOURCES
     src/media/VideoCapturePChannel.cpp
     src/media/AudioCapturePChannel.cpp
     src/media/AudioLevelMeter.cpp
+    src/media/Mp4Faststart.cpp
     src/meeting/MeetingRegistry.cpp
     src/tcp/ControlServer.cpp
 )
