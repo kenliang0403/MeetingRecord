@@ -1,0 +1,42 @@
+﻿LogId,ModuleName,LogTime,Level,LogOrigin,OperationGuid,LogType,Description
+7954377,Smc20.Conference.Service.ConfService,2026/4/29 9:00:22,错误,System,,操作日志,"会议""测试会议""的会场""丰台分院（信息中心） [8112,10.63.106.32]""离会，原因：SMC挂断呼叫"
+7954376,Smc20.Conference.Service.ConfService,2026/4/29 9:00:22,信息,admin2,d82e263e-f8c5-4941-b366-92241520191f,操作日志,挂断会议"测试会议"的会场"丰台分院（信息中心）"。
+7954375,Smc20.Conference.Service.ConfService,2026/4/29 9:00:12,信息,admin2,f5f3f269-d08e-48ce-a685-0bbd6f3748dc,操作日志,发送会议"测试会议"的会场"丰台分院（信息中心）"演示成功
+7954373,Smc20.Conference.Service.ConfService,2026/4/29 9:00:11,信息,admin2,f5f3f269-d08e-48ce-a685-0bbd6f3748dc,操作日志,锁定会议"测试会议" 中的会场"丰台分院（信息中心）"演示令牌成功。
+7954374,Smc20.Conference.Service.ConfService,2026/4/29 9:00:11,信息,admin2,f5f3f269-d08e-48ce-a685-0bbd6f3748dc,操作日志,发送会议"测试会议"的会场"丰台分院（信息中心）"演示
+7954372,Smc20.Conference.Service.ConfService,2026/4/29 9:00:11,信息,admin2,f5f3f269-d08e-48ce-a685-0bbd6f3748dc,操作日志,锁定会议"测试会议"中会场"丰台分院（信息中心）"的演示令牌。
+7954371,Smc20.Conference.Service.ConfService,2026/4/29 9:00:04,信息,System,,操作日志,解锁会议"测试会议" 中的会场"丰台分院（信息中心）"演示令牌成功。
+7954370,Smc20.Conference.Service.ConfService,2026/4/29 9:00:03,信息,admin2,36cfbd73-3167-4b29-8014-333e724c470b,操作日志,停止发送会议"测试会议"的会场"丰台分院（信息中心）"演示成功
+7954368,Smc20.Conference.Service.ConfService,2026/4/29 9:00:03,信息,admin2,36cfbd73-3167-4b29-8014-333e724c470b,操作日志,解锁会议"测试会议"中会场"丰台分院（信息中心）"的演示令牌。
+7954369,Smc20.Conference.Service.ConfService,2026/4/29 9:00:03,信息,admin2,36cfbd73-3167-4b29-8014-333e724c470b,操作日志,停止发送会议"测试会议"的会场"丰台分院（信息中心）"演示
+7954367,Smc20.Conference.Service.ConfService,2026/4/29 8:59:53,信息,admin2,7f853676-9fa4-4b5a-a9f5-cea708b76af9,操作日志,发送会议"测试会议"的会场"丰台分院（信息中心）"演示成功
+7954365,Smc20.Conference.Service.ConfService,2026/4/29 8:59:53,信息,admin2,7f853676-9fa4-4b5a-a9f5-cea708b76af9,操作日志,锁定会议"测试会议" 中的会场"丰台分院（信息中心）"演示令牌成功。
+7954366,Smc20.Conference.Service.ConfService,2026/4/29 8:59:53,信息,admin2,7f853676-9fa4-4b5a-a9f5-cea708b76af9,操作日志,发送会议"测试会议"的会场"丰台分院（信息中心）"演示
+7954364,Smc20.Conference.Service.ConfService,2026/4/29 8:59:52,信息,admin2,7f853676-9fa4-4b5a-a9f5-cea708b76af9,操作日志,锁定会议"测试会议"中会场"丰台分院（信息中心）"的演示令牌。
+7954360,Smc20.Conference.Service.ConfService,2026/4/29 8:59:47,信息,System,,操作日志,解锁会议"测试会议" 中的会场"丰台分院（信息中心）"演示令牌成功。
+7954359,Smc20.Conference.Service.ConfService,2026/4/29 8:59:47,信息,admin2,a4820720-3d8f-41ae-9383-3833da588437,操作日志,停止发送会议"测试会议"的会场"丰台分院（信息中心）"演示成功
+7954357,Smc20.Conference.Service.ConfService,2026/4/29 8:59:47,信息,admin2,a4820720-3d8f-41ae-9383-3833da588437,操作日志,解锁会议"测试会议"中会场"丰台分院（信息中心）"的演示令牌。
+7954358,Smc20.Conference.Service.ConfService,2026/4/29 8:59:47,信息,admin2,a4820720-3d8f-41ae-9383-3833da588437,操作日志,停止发送会议"测试会议"的会场"丰台分院（信息中心）"演示
+7954353,Smc20.Conference.Service.ConfService,2026/4/29 8:59:18,信息,admin2,b6f74bba-70c8-424a-a7a3-1ab7cf8fbdd4,操作日志,发送会议"测试会议"的会场"丰台分院（信息中心）"演示成功
+7954351,Smc20.Conference.Service.ConfService,2026/4/29 8:59:18,信息,admin2,b6f74bba-70c8-424a-a7a3-1ab7cf8fbdd4,操作日志,锁定会议"测试会议" 中的会场"丰台分院（信息中心）"演示令牌成功。
+7954352,Smc20.Conference.Service.ConfService,2026/4/29 8:59:18,信息,admin2,b6f74bba-70c8-424a-a7a3-1ab7cf8fbdd4,操作日志,发送会议"测试会议"的会场"丰台分院（信息中心）"演示
+7954350,Smc20.Conference.Service.ConfService,2026/4/29 8:59:17,信息,admin2,b6f74bba-70c8-424a-a7a3-1ab7cf8fbdd4,操作日志,锁定会议"测试会议"中会场"丰台分院（信息中心）"的演示令牌。
+7954349,Smc20.Conference.Service.ConfService,2026/4/29 8:59:11,信息,admin2,9b958747-48b9-4ee4-8366-3454358a1df5,操作日志,停止发送会议"测试会议"的会场"丰台分院（信息中心）"演示成功
+7954348,Smc20.Conference.Service.ConfService,2026/4/29 8:59:11,信息,admin2,9b958747-48b9-4ee4-8366-3454358a1df5,操作日志,停止发送会议"测试会议"的会场"丰台分院（信息中心）"演示
+7954342,Smc20.Conference.Service.ConfService,2026/4/29 8:57:44,信息,System,,操作日志,"会议""测试会议""的会场""丰台分院（信息中心） [8112,10.63.106.32]""入会。"
+7954341,Smc20.Conference.Service.ConfService,2026/4/29 8:57:43,信息,admin2,b71b8c42-394d-418a-8acc-903acc6ff7cd,操作日志,呼叫会议"测试会议"的会场"丰台分院（信息中心）"。
+7954338,Smc20.Conference.Service.ConfService,2026/4/29 8:57:25,错误,System,,操作日志,"会议""测试会议""的会场""丰台分院（信息中心） [8112,10.63.106.32]""离会，原因：SMC挂断呼叫"
+7954337,Smc20.Conference.Service.ConfService,2026/4/29 8:57:25,信息,admin2,f2a457a6-424a-48e3-a9b7-06a9bf2cc8ae,操作日志,挂断会议"测试会议"的会场"丰台分院（信息中心）"。
+7954328,Smc20.Conference.Service.ConfService,2026/4/29 8:55:29,信息,admin2,b5878103-f380-49ed-afa1-a6224cbb9a76,操作日志,广播会议"测试会议"的会场"TE录播设备"成功。
+7954327,Smc20.Conference.Service.ConfService,2026/4/29 8:55:29,信息,admin2,b5878103-f380-49ed-afa1-a6224cbb9a76,操作日志,广播会议"测试会议"的会场"TE录播设备"。
+7954324,Smc20.Conference.Service.ConfService,2026/4/29 8:55:03,信息,System,,操作日志,"会议""测试会议""的会场""TE录播设备 [<alias-1>,<recorder_host>]""入会。"
+7954325,Smc20.Conference.Service.ConfService,2026/4/29 8:55:03,信息,System,,操作日志,"会议""测试会议""的会场""TE模拟器 [<alias-2>,<recorder_host_secondary>]""入会。"
+7954322,Smc20.Conference.Service.ConfService,2026/4/29 8:55:03,信息,System,,操作日志,"会议""测试会议""的会场""TE录播设备 [<alias-1>,<recorder_host>]""入会。"
+7954323,Smc20.Conference.Service.ConfService,2026/4/29 8:55:03,信息,System,,操作日志,"会议""测试会议""的会场""TE模拟器 [<alias-2>,<recorder_host_secondary>]""入会。"
+7954321,Smc20.Conference.Service.ConfService,2026/4/29 8:54:50,信息,System,,操作日志,"会议""测试会议""的会场""丰台分院（信息中心） [8112,10.63.106.32]""入会。"
+7954317,Smc20.Conference.Service.ConfService,2026/4/29 8:54:48,信息,System,,操作日志,呼叫会议"测试会议"的会场"丰台分院（信息中心）"。
+7954318,Smc20.Conference.Service.ConfService,2026/4/29 8:54:48,信息,System,,操作日志,呼叫会议"测试会议"的会场"TE录播设备"。
+7954319,Smc20.Conference.Service.ConfService,2026/4/29 8:54:48,信息,System,,操作日志,呼叫会议"测试会议"的会场"TE模拟器"。
+7954315,Smc20.Conference.Service.ConfService,2026/4/29 8:54:48,信息,System,,操作日志,会议"测试会议"的子会议号"<dial-number>"注册H323成功
+7954316,Smc20.Conference.Service.ConfService,2026/4/29 8:54:48,信息,System,,操作日志,会议"测试会议"的子会议号"<dial-number>"注册SIP成功
+7954314,Smc20.Conference.Service.ConfService,2026/4/29 8:54:48,信息,admin2,e27193db-d7c1-4763-aec9-f71384edb910,操作日志,会议"测试会议"召集成功。
