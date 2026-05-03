@@ -6,59 +6,102 @@
 {% block body %}
 <h2>实时状态</h2>
 
-<div class="status-grid">
-  <div class="card">
-    <h3>设备</h3>
-    <table id="status-tbl"><tbody>
-      <tr><th>注册</th><td id="s-reg">…</td></tr>
-      <tr><th>Alias</th><td id="s-alias">…</td></tr>
-      <tr><th>GK</th><td id="s-gk">…</td></tr>
-      <tr><th>通话中</th><td id="s-incall">…</td></tr>
-      <tr><th>会议</th><td id="s-meeting">…</td></tr>
-      <tr><th>主流文件</th><td id="s-mainfile">…</td></tr>
-      <tr><th>辅流文件</th><td id="s-auxfile">…</td></tr>
-    </tbody></table>
-  </div>
+<div class="card">
+  <h3>设备</h3>
+  <table id="status-tbl"><tbody>
+    <tr><th>注册</th><td id="s-reg">…</td></tr>
+    <tr><th>Alias</th><td id="s-alias">…</td></tr>
+    <tr><th>GK</th><td id="s-gk">…</td></tr>
+    <tr><th>通话中</th><td id="s-incall">…</td></tr>
+    <tr><th>会议</th><td id="s-meeting">…</td></tr>
+  </tbody></table>
+</div>
 
-  <div class="card">
-    <h3>音频电平 (dBFS)</h3>
-    <div class="vu-row">
-      <div class="vu-col">
-        <div class="vu-label">RMS</div>
-        <canvas id="vu-rms" width="40" height="220"></canvas>
-        <div class="vu-num" id="vu-rms-num">—</div>
+<h3 class="mt section-h">接收（来自 MCU，已转推 SRS）</h3>
+<div class="stream-grid">
+
+  <div class="stream-card">
+    <div class="stream-head">
+      <span class="stream-title">远端主流</span>
+      <span class="stream-badge" id="rx-main-badge">空闲</span>
+    </div>
+    <video id="rx-main" controls muted playsinline></video>
+    <div class="stream-meta">
+      <span class="muted" id="rx-main-file">—</span>
+    </div>
+    <div class="vu-row-h">
+      <div class="vu-h-col">
+        <span class="vu-label">RMS</span>
+        <canvas id="vu-rms" width="220" height="14"></canvas>
+        <span class="vu-num" id="vu-rms-num">—</span>
       </div>
-      <div class="vu-col">
-        <div class="vu-label">PEAK</div>
-        <canvas id="vu-peak" width="40" height="220"></canvas>
-        <div class="vu-num" id="vu-peak-num">—</div>
+      <div class="vu-h-col">
+        <span class="vu-label">Peak</span>
+        <canvas id="vu-peak" width="220" height="14"></canvas>
+        <span class="vu-num" id="vu-peak-num">—</span>
       </div>
     </div>
-    <div class="vu-foot">0 dBFS = 满幅；&lt; -60 视为静默</div>
-  </div>
-</div>
-
-<h2 class="mt">直播流</h2>
-
-<div class="play-stage" id="live-stage">
-  <video id="live-primary"   controls muted playsinline></video>
-  <video id="live-secondary"        muted playsinline></video>
-</div>
-
-<div class="play-bar">
-  <div class="play-bar-row">
-    <span class="play-bar-title">布局</span>
-    <div class="layout-segments" id="live-layout-segments">
-      <button type="button" data-layout="main-only" class="active">仅主流</button>
-      <button type="button" data-layout="aux-only">仅辅流</button>
-      <button type="button" data-layout="pip">画中画</button>
-      <button type="button" data-layout="split">左右分屏</button>
+    <div class="muted" style="font-size:11px; margin-top:4px;">
+      H.323 一通会议仅一路音频，归属此处
     </div>
-    <button type="button" id="live-swap-btn" class="btn btn-link" disabled
-            title="把当前小窗 / 右侧画面提到大画面 / 左侧">⇄ 主画面切换</button>
-    <span class="play-bar-name" id="live-msg"></span>
   </div>
+
+  <div class="stream-card">
+    <div class="stream-head">
+      <span class="stream-title">远端辅流（演示）</span>
+      <span class="stream-badge" id="rx-aux-badge">空闲</span>
+    </div>
+    <video id="rx-aux" controls muted playsinline></video>
+    <div class="stream-meta">
+      <span class="muted" id="rx-aux-file">—</span>
+    </div>
+    <div class="muted" style="font-size:11px; margin-top:4px;">
+      仅在远端发起 H.239 演示时活跃
+    </div>
+  </div>
+
 </div>
+
+<h3 class="mt section-h">发送（recorder → MCU）</h3>
+<div class="stream-grid">
+
+  <div class="stream-card">
+    <div class="stream-head">
+      <span class="stream-title">本地主流</span>
+      <span class="stream-badge" id="tx-main-badge">空闲</span>
+    </div>
+    <div class="stream-placeholder" id="tx-main-placeholder">
+      ScreenSaver 测试图（不推 SRS，只发往 MCU）
+    </div>
+    <div class="stream-meta">
+      <span class="muted">本地发送，浏览器无法直接预览画面</span>
+    </div>
+    <div class="stream-actions">
+      <button type="button" class="btn btn-primary"  data-control="start_main_video">▶ 开始发送</button>
+      <button type="button" class="btn btn-link"     data-control="stop_main_video">■ 停止</button>
+    </div>
+  </div>
+
+  <div class="stream-card">
+    <div class="stream-head">
+      <span class="stream-title">本地辅流（演示）</span>
+      <span class="stream-badge" id="tx-aux-badge">空闲</span>
+    </div>
+    <div class="stream-placeholder" id="tx-aux-placeholder">
+      NoSignal 演示占位图（H.239 send）
+    </div>
+    <div class="stream-meta">
+      <span class="muted">SMC 070E 触发或手动启动</span>
+    </div>
+    <div class="stream-actions">
+      <button type="button" class="btn btn-primary"  data-control="start_presentation">▶ 开始演示</button>
+      <button type="button" class="btn btn-link"     data-control="stop_presentation">■ 停止</button>
+    </div>
+  </div>
+
+</div>
+
+<div id="control-msg" class="control-msg muted"></div>
 
 <script>
   const SRS_BASE = "{{ srs_base }}";

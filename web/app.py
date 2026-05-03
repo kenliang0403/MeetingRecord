@@ -526,6 +526,21 @@ def api_recordings():
     return jsonify({"ok": True, "data": _scan_recordings()})
 
 
+# 直播页"启停本地发送"按钮的代理：白名单仅这 4 条 9001 命令
+_CONTROL_WHITELIST = {
+    "start_main_video", "stop_main_video",
+    "start_presentation", "stop_presentation",
+}
+
+
+@app.route("/api/control/<cmd>", methods=["POST"])
+@login_required
+def api_control(cmd):
+    if cmd not in _CONTROL_WHITELIST:
+        return jsonify({"ok": False, "error": "command not allowed"}), 400
+    return jsonify(client.call(cmd))
+
+
 @app.route("/healthz")
 def healthz():
     """无需登录：方便监控/反代健康检查。仅返回 web 自身存活，不查 recorder-core。"""
