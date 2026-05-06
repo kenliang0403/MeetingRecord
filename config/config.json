@@ -43,7 +43,7 @@
     "queue_max":           200,
     "reconnect_delay_ms":  2000
   },
-  "auto_send_video": false,
+  "auto_send_video": true,
   "terminal_id": "TE录播设备",
   "log_dir":   "/opt/recorder/logs",
   "log_level": "info"

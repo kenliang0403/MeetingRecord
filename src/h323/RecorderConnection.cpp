@@ -222,6 +222,12 @@ void RecorderConnection::OnEstablished()
     capRefreshTimer_.SetNotifier(PCREATE_NOTIFIER(OnCapRefreshTimer));
     capRefreshTimer_.SetInterval(0, 5);
 
+    // conferenceRequests + TE nonStandard
+    try { H323ControlPDU p; H245_RequestMessage& r=p.Build(H245_RequestMessage::e_conferenceRequest); H245_ConferenceRequest& c=(H245_ConferenceRequest&)r; c.SetTag(H245_ConferenceRequest::e_terminalListRequest); WriteControlPDU(p); } catch(...) {}
+    try { H323ControlPDU p; H245_RequestMessage& r=p.Build(H245_RequestMessage::e_conferenceRequest); H245_ConferenceRequest& c=(H245_ConferenceRequest&)r; c.SetTag(H245_ConferenceRequest::e_requestAllTerminalIDs); WriteControlPDU(p); } catch(...) {}
+    try { H323ControlPDU p; H245_RequestMessage& r=p.Build(H245_RequestMessage::e_conferenceRequest); H245_ConferenceRequest& c=(H245_ConferenceRequest&)r; c.SetTag(H245_ConferenceRequest::e_requestChairTokenOwner); WriteControlPDU(p); } catch(...) {}
+    try { H323ControlPDU p; H245_RequestMessage& r=p.Build(H245_RequestMessage::e_nonStandard); H245_NonStandardMessage& n=(H245_NonStandardMessage&)r; n.m_nonStandardData.m_nonStandardIdentifier.SetTag(H245_NonStandardIdentifier::e_h221NonStandard); H245_NonStandardIdentifier_h221NonStandard& h=(H245_NonStandardIdentifier_h221NonStandard&)n.m_nonStandardData.m_nonStandardIdentifier; h.m_t35CountryCode=86;h.m_t35Extension=1;h.m_manufacturerCode=1; static const BYTE q[]={0x01,0x06,0x00,0x08,0x81,0x75,0x00,0x02,0x48,0x00}; n.m_nonStandardData.m_data.SetValue(q,sizeof(q)); WriteControlPDU(p); } catch(...) {}
+
     // ── 主流视频自动发送 ──────────────────────────────────────────────────────
     // auto_send_video=true  → 任何通话建立后自动发送主流（模拟 TE 终端）
     // auto_send_video=false → 只录制，不主动发送（默认）
@@ -720,18 +726,10 @@ PBoolean RecorderConnection::OnH245Command(const H323ControlPDU& pdu)
                     }
                 }
             }
-            // 任何 Huawei 私有 nonStandardCommand (86/1/*) 都静默吞掉。
-            // 关键：MCU 在通话早期会发 mfr=4607 探测 Huawei 私有控制支持；
-            // 若回 functionNotUnderstood，MCU 把我们标记为不支持远端 H.239 控制，
-            // 之后 SMC 操作时根本不会再向我们发送 070E 命令。
-            // 0429 抓包确认：16:32:03 收到 86/1/4607 8B → 我们回 functionNotUnderstood
-            // → 16:32:19 SMC 发送演示 失败，期间 MCU 完全没发任何控制命令。
-            if (cc == 86 && ext == 1) {
-                spdlog::info("RecorderConnection: absorbing Huawei nonStandardCommand "
-                             "(cc=86 ext=1 mfr={}) to avoid functionNotUnderstood reply",
-                             manuf);
-                return TRUE;
-            }
+            if (cc==86 && ext==1 && (manuf==4608||manuf==4614||manuf==4610||manuf==4616||manuf==4612||manuf==4607||manuf==4609||manuf==4615)) {
+                try { H323ControlPDU epdu; H245_CommandMessage& ec=epdu.Build(H245_CommandMessage::e_nonStandard); H245_NonStandardMessage& en=(H245_NonStandardMessage&)ec; en.m_nonStandardData.m_nonStandardIdentifier.SetTag(H245_NonStandardIdentifier::e_h221NonStandard); H245_NonStandardIdentifier_h221NonStandard& eh=(H245_NonStandardIdentifier_h221NonStandard&)en.m_nonStandardData.m_nonStandardIdentifier; eh.m_t35CountryCode=cc; eh.m_t35Extension=ext; eh.m_manufacturerCode=manuf; en.m_nonStandardData.m_data=nsp.m_data; WriteControlPDU(epdu); } catch(...) {} return TRUE; }
+            // absorb other Huawei
+            if (cc == 86 && ext == 1) { return TRUE; }
         }
     }
     return H323Connection::OnH245Command(pdu);
@@ -823,6 +821,9 @@ void RecorderConnection::OnSendCapabilitySet(H245_TerminalCapabilitySet& pdu)
         pdu.IncludeOptionalField(H245_TerminalCapabilitySet::e_capabilityTable);
     }
 
+    // Audio promotion
+    { PINDEX s=pdu.m_capabilityTable.GetSize(); for(PINDEX i=0;i<s;++i) if(pdu.m_capabilityTable[i].m_capability.GetTag()==H245_Capability::e_receiveAudioCapability){ PINDEX idx=pdu.m_capabilityTable.GetSize(); pdu.m_capabilityTable.SetSize(idx+1); pdu.m_capabilityTable[idx]=pdu.m_capabilityTable[i]; pdu.m_capabilityTable[idx].m_capability.SetTag(H245_Capability::e_receiveAndTransmitAudioCapability); } }
+
     unsigned maxNum = 0;
     for (PINDEX i = 0; i < pdu.m_capabilityTable.GetSize(); ++i) {
         unsigned n = (unsigned)pdu.m_capabilityTable[i].m_capabilityTableEntryNumber;
@@ -890,13 +891,9 @@ void RecorderConnection::OnSendCapabilitySet(H245_TerminalCapabilitySet& pdu)
     fillSet(desc.m_simultaneousCapabilities[0], entryB);
     fillSet(desc.m_simultaneousCapabilities[1], entryC);
 
-    spdlog::info("RecorderConnection: injected 2 Huawei nonStandardCapability entries "
-                 "(B=#{} video 38/0/8209, C=#{} marker 28/21/555); "
-                 "table {}→{}, added capabilityDescriptor #{} with 2 single-cap sim-sets "
-                 "(Entry A audio disabled — MCU will use standard G.722/G.711)",
-                 entryB, entryC,
-                 (int)startSize, (int)pdu.m_capabilityTable.GetSize(),
-                 maxDescNum + 1);
+    spdlog::info("RecorderConnection: nonStandard entries B=#{} C=#{}", entryB, entryC);
+    // T.120
+    { PINDEX idx=pdu.m_capabilityTable.GetSize(); pdu.m_capabilityTable.SetSize(idx+1); H245_CapabilityTableEntry& e=pdu.m_capabilityTable[idx]; e.m_capabilityTableEntryNumber=nextNum++; e.m_capability.SetTag(H245_Capability::e_receiveAndTransmitDataApplicationCapability); H245_DataApplicationCapability& c=(H245_DataApplicationCapability&)e.m_capability; c.m_application.SetTag(1); ((PASN_Choice&)c.m_application).SetTag(1); c.m_maxBitRate=640; }
 }
 
 PBoolean RecorderConnection::OnH245Indication(const H323ControlPDU& pdu)
