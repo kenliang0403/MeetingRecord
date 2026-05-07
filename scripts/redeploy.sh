@@ -1,51 +1,54 @@
 #!/bin/bash
-# Redeploy on 102: hangup, install, restart.
+# redeploy.sh — atomic-install new binary, trigger systemd restart.
+#
+# Caller (upload_build.ps1) is expected to have already run
+# `cmake --build . --target recorder-core` before invoking this script.
+#
+# Does NOT run `cmake --install` because that would overwrite the live
+# /opt/recorder/config/config.json (alias / e164 / terminal_id are set
+# per-host at runtime, not via the repo default).
+#
+# Does NOT kill or nohup-start processes — systemd (recorder-core.service)
+# manages the lifecycle, and recorder-restart.path watches the trigger file
+# /opt/recorder/run/restart-recorder.flag for restart requests.
 set -e
-cd /opt/recorder/recorder-core/build
 
-# 1) graceful hangup if a call is active (best effort)
-python3 /tmp/ctrl_query.py hangup 2>/dev/null || true
-sleep 1
-
-# 2) install the new binary into /opt/recorder/bin/
 PW="$1"
 if [ -z "$PW" ]; then
     echo "usage: redeploy.sh <sudo_password>"
     exit 1
 fi
-echo "$PW" | sudo -S -p '' cmake --install . 2>&1 | tail -10
+SUDO() { echo "$PW" | sudo -S -p '' "$@"; }
 
-# 3) stop old process
-PID=$(pgrep -f "recorder-core -c /opt/recorder/config/config.json" || true)
-if [ -n "$PID" ]; then
-    echo "stopping pid=$PID"
-    kill -TERM $PID
-    for i in 1 2 3 4 5; do
-        sleep 1
-        if ! kill -0 $PID 2>/dev/null; then break; fi
-    done
-    if kill -0 $PID 2>/dev/null; then
-        echo "force kill"
-        kill -KILL $PID
-    fi
+BUILD_BIN=/opt/recorder/recorder-core/build/recorder-core
+LIVE_BIN=/opt/recorder/bin/recorder-core
+TRIGGER=/opt/recorder/run/restart-recorder.flag
+
+if [ ! -x "$BUILD_BIN" ]; then
+    echo "build binary missing: $BUILD_BIN — did cmake --build run?"
+    exit 1
 fi
 
-# 4) rotate stdout.log so we have a clean run
-if [ -f /opt/recorder/logs/stdout.log ]; then
-    mv /opt/recorder/logs/stdout.log /opt/recorder/logs/stdout.log.prev
+# 1) atomic-replace the live binary. install(1) uses rename(2), so it
+#    works even while the old binary is executing — the running process
+#    keeps its old inode via its open fd, while new starts read the new
+#    inode at the same path.
+SUDO install -m 0755 "$BUILD_BIN" "$LIVE_BIN"
+ls -l "$LIVE_BIN"
+
+# 2) trigger systemd to restart via the path-unit. /opt/recorder/run/ is
+#    chowned ftadmin:ftadmin by install_web.sh, so writing the flag file
+#    needs no sudo.
+if [ ! -d "$(dirname "$TRIGGER")" ]; then
+    SUDO mkdir -p "$(dirname "$TRIGGER")"
+    SUDO chown ftadmin:ftadmin "$(dirname "$TRIGGER")"
 fi
+date '+%Y-%m-%d %H:%M:%S' > "$TRIGGER"
 
-# 5) start new process via start.sh which sets LD_LIBRARY_PATH (gcc-toolset-12)
-cd /home/ftadmin
-nohup bash /opt/recorder/scripts/start.sh \
-    > /opt/recorder/logs/stdout.log 2>&1 &
-disown || true
-
-sleep 2
-NEWPID=$(pgrep -f "recorder-core -c /opt/recorder/config/config.json" || true)
-echo "new pid=$NEWPID"
-ls -l /opt/recorder/bin/recorder-core
+# 3) brief verify
+sleep 3
+echo "=== status ==="
+SUDO systemctl status recorder-core --no-pager | head -8
 echo
-echo "=== first 30 log lines ==="
-sleep 1
-head -30 /opt/recorder/logs/stdout.log 2>/dev/null
+echo "=== last 6 log lines ==="
+SUDO journalctl -u recorder-core -n 6 --no-pager

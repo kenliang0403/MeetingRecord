@@ -34,6 +34,9 @@ $target = "ftadmin@<recorder_host_secondary>"
 
 # Upload deploy script
 & scp @scpCommon (Join-Path $PSScriptRoot "deploy_104.sh") "${target}:/tmp/deploy_104.sh" | Out-Host
+# Strip CRLF in case Windows git autocrlf snuck through (.gitattributes
+# locks *.sh to LF, but defensively also normalize on the wire).
+& ssh @sshCommon $target "sed -i 's/\r$//' /tmp/deploy_104.sh" | Out-Host
 
 $pw = $env:RECORDER_102_PASSWORD
 & ssh @sshCommon $target "chmod +x /tmp/deploy_104.sh && bash /tmp/deploy_104.sh '$pw'" | Out-Host

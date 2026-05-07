@@ -1,55 +1,54 @@
 #!/bin/bash
-# 104 deploy: build only, replace binary manually, do NOT run cmake install
-# (cmake install would overwrite /opt/recorder/config/config.json with the
-# repo's default which has alias=<alias-1> — 104 needs alias=<alias-2>.)
+# deploy_104.sh — build, atomic-install binary, trigger systemd restart.
+#
+# Same shape as redeploy.sh but does the cmake --build itself (the .ps1
+# wrapper for 104 doesn't pre-build).
+#
+# Does NOT run `cmake --install` because that would overwrite
+# /opt/recorder/config/config.json with the repo default (alias=<alias-1>),
+# while 104 needs its own alias (e.g. <alias-2>).
+#
+# Does NOT kill or nohup-start processes — systemd manages the lifecycle.
 set -e
 
 PW="$1"
 if [ -z "$PW" ]; then
-  echo "usage: deploy_104.sh <sudo_password>"
-  exit 1
+    echo "usage: deploy_104.sh <sudo_password>"
+    exit 1
+fi
+SUDO() { echo "$PW" | sudo -S -p '' "$@"; }
+
+BUILD_DIR=/opt/recorder/recorder-core/build
+BUILD_BIN="$BUILD_DIR/recorder-core"
+LIVE_BIN=/opt/recorder/bin/recorder-core
+TRIGGER=/opt/recorder/run/restart-recorder.flag
+
+# 1) build
+cd "$BUILD_DIR"
+SUDO cmake --build . --target recorder-core -j 2>&1 | tail -10
+
+if [ ! -x "$BUILD_BIN" ]; then
+    echo "build binary missing after build: $BUILD_BIN"
+    exit 1
 fi
 
-cd /opt/recorder/recorder-core/build
-echo "$PW" | sudo -S -p '' cmake --build . --target recorder-core -j 2>&1 | tail -25
+# 2) atomic-replace the live binary (rename(2); safe while old binary runs)
+SUDO install -m 0755 "$BUILD_BIN" "$LIVE_BIN"
+ls -l "$LIVE_BIN"
 
-# Best-effort: clear any active call before stopping
-python3 /opt/recorder/recorder-core/scripts/ctrl_query.py clear_call 2>/dev/null || true
-sleep 1
-
-# Stop running process
-PID=$(pgrep -f "recorder-core -c /opt/recorder/config/config.json" || true)
-if [ -n "$PID" ]; then
-  echo "stopping pid=$PID"
-  kill -TERM $PID || true
-  for i in 1 2 3 4 5; do
-    sleep 1
-    if ! kill -0 $PID 2>/dev/null; then break; fi
-  done
-  if kill -0 $PID 2>/dev/null; then
-    echo "force kill"
-    kill -KILL $PID
-  fi
+# 3) trigger systemd restart via path-unit. /opt/recorder/run/ should be
+#    chowned to ftadmin by install_web.sh; create+chown defensively here
+#    in case install_web.sh hasn't run on this box yet.
+if [ ! -d "$(dirname "$TRIGGER")" ]; then
+    SUDO mkdir -p "$(dirname "$TRIGGER")"
+    SUDO chown ftadmin:ftadmin "$(dirname "$TRIGGER")"
 fi
+date '+%Y-%m-%d %H:%M:%S' > "$TRIGGER"
 
-# Replace binary manually (no cmake install, keeps existing config.json)
-echo "$PW" | sudo -S -p '' cp /opt/recorder/recorder-core/build/recorder-core /opt/recorder/bin/recorder-core
-echo "$PW" | sudo -S -p '' chmod +x /opt/recorder/bin/recorder-core
-ls -l /opt/recorder/bin/recorder-core
-
-# Rotate log
-if [ -f /opt/recorder/logs/stdout.log ]; then
-  mv /opt/recorder/logs/stdout.log /opt/recorder/logs/stdout.log.prev
-fi
-
-# Start via existing start.sh (sets LD_LIBRARY_PATH for gcc-toolset-12)
-cd /home/ftadmin
-nohup bash /opt/recorder/scripts/start.sh > /opt/recorder/logs/stdout.log 2>&1 &
-disown || true
-sleep 2
-
-NEWPID=$(pgrep -f "recorder-core -c /opt/recorder/config/config.json" || true)
-echo "new pid=$NEWPID"
-echo "=== first 15 log lines ==="
-sleep 1
-head -15 /opt/recorder/logs/stdout.log 2>/dev/null
+# 4) brief verify
+sleep 3
+echo "=== status ==="
+SUDO systemctl status recorder-core --no-pager | head -8
+echo
+echo "=== last 6 log lines ==="
+SUDO journalctl -u recorder-core -n 6 --no-pager
