@@ -349,10 +349,15 @@ void RecorderConnection::OnClosedLogicalChannel(const H323Channel& channel)
 
     // H.239 extended video uses session=10 (VP9660 convention).
     // Any non-primary session that we had tagged as aux should finalize.
-    if (sessionID == 10 && auxRecorder_ && auxRecorder_->isOpen()) {
-        spdlog::info("RecorderConnection: H.239 CLC → finalizing aux segment {}",
-                     activeAuxPath_);
-        closeActiveAux(NowWallMs());
+    if (sessionID == 10) {
+        if (auxRecorder_ && auxRecorder_->isOpen()) {
+            spdlog::info("RecorderConnection: H.239 CLC → finalizing aux segment {}",
+                         activeAuxPath_);
+            closeActiveAux(NowWallMs());
+        }
+        // 复位 H.239 接收标志，否则 hasH239() 一直返回 true，
+        // 前端 dashboard 误报"远端辅流接收中"（虽然实际 aux 已 finalize）。
+        h239Received_ = false;
     }
 
     H323Connection::OnClosedLogicalChannel(channel);
