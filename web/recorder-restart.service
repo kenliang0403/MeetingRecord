@@ -1,0 +1,9 @@
+[Unit]
+Description=Restart recorder-core when web admin requests it
+After=recorder-core.service
+
+[Service]
+Type=oneshot
+# Drop the trigger file first so a future write is detected as a fresh change.
+ExecStart=-/bin/rm -f /opt/recorder/run/restart-recorder.flag
+ExecStart=/bin/systemctl --no-block restart recorder-core.service

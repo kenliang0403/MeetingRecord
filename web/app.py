@@ -7,7 +7,7 @@ Endpoints:
   GET  /logout
   GET  /config           配置编辑页（textarea + 保存 + 重启按钮）
   POST /config/save      保存 JSON 到 config.json
-  POST /config/restart   重启 recorder-core 服务（sudo systemctl）
+  POST /config/restart   重启 recorder-core 服务（写触发文件，systemd path unit 执行）
   GET  /recordings       回放索引（直接扫盘）
   GET  /recordings/<m>   单会议回放页
   GET  /play/<m>/<f>     文件 (Range supported)
@@ -22,11 +22,10 @@ API (login required):
   - 30 分钟 idle 自动登出 (PERMANENT_SESSION_LIFETIME)
   - 密码哈希存 /opt/recorder/web/auth.json，浏览器只见 session cookie
   - HLS 流不经 Flask 反代，前端 JS 直连 SRS:8080，省带宽
-  - 配置 / 重启走 web 进程本地 — sudoers 只放行单条 systemctl restart
+  - 配置 / 重启走 web 进程本地 — 重启用触发文件 + systemd path unit，web 不需要 sudo
 """
 import json
 import os
-import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -340,29 +339,22 @@ def config_save_advanced():
     return redirect(url_for("config_page"))
 
 
+RESTART_FLAG = Path(os.environ.get(
+    "RECORDER_RESTART_FLAG", "/opt/recorder/run/restart-recorder.flag"))
+
+
 @app.route("/config/restart", methods=["POST"])
 @login_required
 def config_restart():
-    """通过 sudo systemctl 重启 recorder-core 服务。sudoers 必须放行：
-       ftadmin ALL=(root) NOPASSWD: /bin/systemctl restart recorder-core.service
-    """
-    # --no-block：systemctl 把请求交给 PID 1 立即返回，不等 unit 真正起来。
-    # 加上 5s timeout 防御，正常情况下 < 100 ms 返回。
+    """触发 recorder-core 重启：写一个标志文件，root 跑的 systemd path unit
+    监听到 close-after-write 后调用 `systemctl restart recorder-core`。
+    web 进程因此不需要任何 sudo 权限。"""
     try:
-        proc = subprocess.run(
-            ["sudo", "-n", "/bin/systemctl", "--no-block", "restart", RECORDER_UNIT],
-            capture_output=True, text=True, timeout=5,
-        )
-        if proc.returncode != 0:
-            flash(
-                f"重启请求失败 (rc={proc.returncode}): "
-                f"{(proc.stderr or proc.stdout).strip()}",
-                "error",
-            )
-        else:
-            flash(f"已请求重启 {RECORDER_UNIT}（约 2-3 秒后完成）", "info")
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        flash(f"重启异常：{e}", "error")
+        RESTART_FLAG.parent.mkdir(parents=True, exist_ok=True)
+        RESTART_FLAG.write_text(datetime.now().isoformat(timespec="seconds"))
+        flash(f"已请求重启 {RECORDER_UNIT}（约 2-3 秒后完成）", "info")
+    except OSError as e:
+        flash(f"重启请求失败：{e}", "error")
     return redirect(url_for("config_page"))
 
 

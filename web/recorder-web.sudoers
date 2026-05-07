@@ -1,7 +1,0 @@
-# /etc/sudoers.d/recorder-web — installed by install_web.sh
-# 让 web 进程能且仅能重启 recorder-core 服务，不放开任何其它 sudo 权限。
-# 注意 --no-block 是另一条命令行，sudoers 里要单独列。
-ftadmin ALL=(root) NOPASSWD: /bin/systemctl restart recorder-core.service
-ftadmin ALL=(root) NOPASSWD: /bin/systemctl restart recorder-core
-ftadmin ALL=(root) NOPASSWD: /bin/systemctl --no-block restart recorder-core.service
-ftadmin ALL=(root) NOPASSWD: /bin/systemctl --no-block restart recorder-core

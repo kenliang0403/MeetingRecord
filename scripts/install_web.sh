@@ -1,7 +1,8 @@
 #!/bin/bash
 # install_web.sh — first-time setup of the recorder admin web on a server.
-# Also installs / refreshes the recorder-core systemd unit and a sudoers
-# drop-in that lets the web process restart the recorder service.
+# Also installs / refreshes the recorder-core systemd unit and a path/service
+# unit pair that lets the web process trigger a recorder-core restart by
+# writing a flag file (no sudo needed for the web process).
 #
 # Usage:  bash install_web.sh <sudo_password>
 #
@@ -45,9 +46,16 @@ SUDO cp "${WEB_DST}/recorder-core.service" /etc/systemd/system/recorder-core.ser
 echo "[5/8] install / refresh recorder-web.service"
 SUDO cp "${WEB_DST}/recorder-web.service"  /etc/systemd/system/recorder-web.service
 
-echo "[6/8] install sudoers drop-in (allow web → systemctl restart recorder-core)"
-SUDO install -m 0440 -o root -g root \
-  "${WEB_DST}/recorder-web.sudoers" /etc/sudoers.d/recorder-web
+echo "[6/8] install recorder-restart path/service units (sudoless restart trigger)"
+# web 写 /opt/recorder/run/restart-recorder.flag → systemd path unit (root)
+# 监听 close-after-write → 触发 service unit 跑 `systemctl restart recorder-core`
+# web 进程因此不需要任何 sudo / sudoers 权限。
+SUDO cp "${WEB_DST}/recorder-restart.path"    /etc/systemd/system/recorder-restart.path
+SUDO cp "${WEB_DST}/recorder-restart.service" /etc/systemd/system/recorder-restart.service
+SUDO mkdir -p /opt/recorder/run
+SUDO chown ftadmin:ftadmin /opt/recorder/run
+# 清理早期版本遗留的 sudoers drop-in（已废弃，曾因 CRLF 导致 sudo 锁死）
+SUDO rm -f /etc/sudoers.d/recorder-web
 
 SUDO systemctl daemon-reload
 
@@ -71,6 +79,7 @@ SUDO systemctl enable recorder-core
 SUDO systemctl restart recorder-core
 SUDO systemctl enable recorder-web
 SUDO systemctl restart recorder-web
+SUDO systemctl enable --now recorder-restart.path
 
 # auth.json bootstrap — only when missing
 if [ ! -f "${WEB_DST}/auth.json" ]; then

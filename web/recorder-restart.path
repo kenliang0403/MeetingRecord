@@ -1,0 +1,12 @@
+[Unit]
+Description=Watch for recorder-core restart trigger from web admin
+Documentation=man:systemd.path(5)
+
+[Path]
+# web admin writes (touches) this file to request a restart.
+# systemd fires the .service when the file is modified (close-after-write).
+PathChanged=/opt/recorder/run/restart-recorder.flag
+Unit=recorder-restart.service
+
+[Install]
+WantedBy=multi-user.target

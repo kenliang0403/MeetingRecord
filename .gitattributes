@@ -1,0 +1,13 @@
+# Force LF line endings on files that ship to Linux servers.
+# Windows git autocrlf would otherwise corrupt them — most importantly
+# anything that lands in /etc/sudoers.d (visudo refuses CRLF) or that
+# bash parses as a script.
+
+*.sh           text eol=lf
+*.service      text eol=lf
+*.path         text eol=lf
+*.sudoers      text eol=lf
+*.timer        text eol=lf
+*.socket       text eol=lf
+*.target       text eol=lf
+*.mount        text eol=lf
