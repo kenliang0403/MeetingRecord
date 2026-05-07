@@ -143,7 +143,7 @@ EDITABLE_FIELDS = [
     # ── 网关与终端身份 ────────────────────────────────────────────
     ("__group_gk", "网关 GK / 终端身份", None, None, None),
     ("gk_host",     "GK 服务器地址", "text",     ("gk", "host"),     "例如 <gk_host>"),
-    ("gk_alias",    "终端 Alias",    "text",     ("gk", "alias"),    "例如 <alias-1>"),
+    ("gk_alias",    "终端 Alias",    "text",     ("gk", "alias"),    "例如 <alias-1>（同时作为 E.164 号注册到 GK，e164 字段自动跟随）"),
     ("gk_password", "GK 密码",       "password", ("gk", "password"), "留空保留原值；输入新值覆盖"),
     ("terminal_id", "终端显示名",    "text",     ("terminal_id",),   "MCU 名册中显示的中文名"),
 
@@ -296,6 +296,11 @@ def config_save():
     if errors:
         flash("保存失败：\n" + "\n".join(errors), "error")
         return redirect(url_for("config_page"))
+
+    # H.323 GK 注册要求 alias 和 e164 一致；UI 只暴露 alias，这里强制同步 e164
+    # 防止只改 alias 不改 e164 导致 GK 拒绝注册（2026-05-07 踩过这个坑）。
+    if "gk" in cfg and "alias" in cfg["gk"]:
+        cfg["gk"]["e164"] = cfg["gk"]["alias"]
 
     try:
         tmp = CONFIG_PATH + ".tmp"
