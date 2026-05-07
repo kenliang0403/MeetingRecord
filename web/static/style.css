@@ -515,6 +515,35 @@ canvas    { background: #11141a; border-radius: 4px; }
 }
 .control-msg.control-msg-err { color: #b91c1c; }
 
+/* live 页：占位提示层（无信号时显示） */
+.stage-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #d1d5db;
+  font-size: 16px;
+  pointer-events: none;
+  background: rgba(0,0,0,0.3);
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 3;
+}
+.stage-overlay.show { opacity: 1; }
+/* split 模式下辅层只盖右半边 */
+.play-stage.layout-split .overlay-secondary {
+  left: 50%;
+}
+.play-stage.layout-pip .overlay-secondary {
+  inset: auto 16px 16px auto;
+  width: 28%;
+  aspect-ratio: 16/9;
+  border-radius: 6px;
+}
+.play-stage.layout-main-only .overlay-secondary,
+.play-stage.layout-aux-only .overlay-secondary { display: none; }
+
 /* 横向 VU 表（dashboard 卡片内的小条） */
 .vu-row-h {
   display: flex; flex-direction: column; gap: 4px;

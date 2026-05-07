@@ -123,6 +123,17 @@ def dashboard():
     )
 
 
+@app.route("/live")
+@login_required
+def live_page():
+    return render_template(
+        "live.html",
+        srs_base=srs_base_url(),
+        main_stream=MAIN_STREAM,
+        aux_stream=AUX_STREAM,
+    )
+
+
 # --- 字段化配置：只暴露常用项；保存时 read-merge-write，其它字段原封不动 ---
 #
 # 每条 = (form name, 中文标签, 类型, JSON 路径, 提示文案/选项)

@@ -1,8 +1,5 @@
 {% extends "base.html" %}
 {% block title %}状态 — Recorder Admin{% endblock %}
-{% block head %}
-<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
-{% endblock %}
 {% block body %}
 <h2>实时状态</h2>
 
@@ -25,7 +22,6 @@
       <span class="stream-title">远端主流</span>
       <span class="stream-badge" id="rx-main-badge">空闲</span>
     </div>
-    <video id="rx-main" controls muted playsinline></video>
     <div class="stream-meta">
       <span class="muted" id="rx-main-file">—</span>
     </div>
@@ -42,7 +38,7 @@
       </div>
     </div>
     <div class="muted" style="font-size:11px; margin-top:4px;">
-      H.323 一通会议仅一路音频，归属此处
+      H.323 一通会议仅一路音频，归此处
     </div>
   </div>
 
@@ -51,7 +47,6 @@
       <span class="stream-title">远端辅流（演示）</span>
       <span class="stream-badge" id="rx-aux-badge">空闲</span>
     </div>
-    <video id="rx-aux" controls muted playsinline></video>
     <div class="stream-meta">
       <span class="muted" id="rx-aux-file">—</span>
     </div>
@@ -70,11 +65,8 @@
       <span class="stream-title">本地主流</span>
       <span class="stream-badge" id="tx-main-badge">空闲</span>
     </div>
-    <div class="stream-placeholder" id="tx-main-placeholder">
-      ScreenSaver 测试图（不推 SRS，只发往 MCU）
-    </div>
     <div class="stream-meta">
-      <span class="muted">本地发送，浏览器无法直接预览画面</span>
+      <span class="muted">ScreenSaver 测试图直发 H.323，可在"直播"页查看混音后的会议画面</span>
     </div>
     <div class="stream-actions">
       <button type="button" class="btn btn-primary"  data-control="start_main_video">▶ 开始发送</button>
@@ -87,11 +79,8 @@
       <span class="stream-title">本地辅流（演示）</span>
       <span class="stream-badge" id="tx-aux-badge">空闲</span>
     </div>
-    <div class="stream-placeholder" id="tx-aux-placeholder">
-      NoSignal 演示占位图（H.239 send）
-    </div>
     <div class="stream-meta">
-      <span class="muted">SMC 070E 触发或手动启动</span>
+      <span class="muted">SMC 070E 自动触发或手动启动；状态由 recorder-core 实时上报</span>
     </div>
     <div class="stream-actions">
       <button type="button" class="btn btn-primary"  data-control="start_presentation">▶ 开始演示</button>
@@ -101,13 +90,10 @@
 
 </div>
 
-<div id="control-msg" class="control-msg muted"></div>
+<div id="control-msg" class="control-msg muted">
+  画面预览请前往 <a href="{{ url_for('live_page') }}">直播</a> 页
+</div>
 
-<script>
-  const SRS_BASE = "{{ srs_base }}";
-  const MAIN_KEY = "{{ main_stream }}";
-  const AUX_KEY  = "{{ aux_stream }}";
-</script>
 <script src="{{ url_for('static', filename='vu.js') }}"></script>
 <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
 {% endblock %}

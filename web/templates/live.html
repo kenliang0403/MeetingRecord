@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}直播 — Recorder Admin{% endblock %}
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+{% endblock %}
+{% block body %}
+<h2>直播</h2>
+
+<div class="play-stage" id="live-stage">
+  <video id="live-primary"   controls muted playsinline></video>
+  <video id="live-secondary"        muted playsinline></video>
+  <!-- 占位提示层 — 无信号时显示 -->
+  <div class="stage-overlay" id="live-overlay-primary"></div>
+  <div class="stage-overlay overlay-secondary" id="live-overlay-secondary"></div>
+</div>
+
+<div class="play-bar">
+  <div class="play-bar-row">
+    <span class="play-bar-title">布局</span>
+    <div class="layout-segments" id="live-layout-segments">
+      <button type="button" data-layout="main-only" class="active">仅主流</button>
+      <button type="button" data-layout="aux-only">仅辅流</button>
+      <button type="button" data-layout="pip">画中画</button>
+      <button type="button" data-layout="split">左右分屏</button>
+    </div>
+    <button type="button" id="live-swap-btn" class="btn btn-link" disabled
+            title="把当前小窗 / 右侧画面提到大画面 / 左侧">⇄ 主画面切换</button>
+    <span class="play-bar-name" id="live-msg"></span>
+  </div>
+</div>
+
+<script>
+  const SRS_BASE = "{{ srs_base }}";
+  const MAIN_KEY = "{{ main_stream }}";
+  const AUX_KEY  = "{{ aux_stream }}";
+</script>
+<script src="{{ url_for('static', filename='live.js') }}"></script>
+{% endblock %}
