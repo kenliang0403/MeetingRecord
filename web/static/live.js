@@ -1,49 +1,101 @@
 // live.js — 直播页：同回放页相同的 stage + 4 布局，但拉的是 HLS 直播流
 //
-// 在 status 给出"未在通话 / 无辅流"时，覆盖一层占位文字提示，
-// 而不是任由 hls.js 在黑屏上无限重试。
+// 行为：
+//   - video 元素带 autoplay+muted（浏览器策略），用户首次在页面上点击/触摸
+//     一次后自动取消 primary 的静音，相当于"打开声音"。
+//   - 流是否真的 attach hls.js 由后端 /api/status 状态决定：
+//       main 活跃   ⇔ in_call && main_file 非空
+//       aux 活跃    ⇔ in_call && (has_presentation || h239_received || aux_recording)
+//     不活跃时不 attach（避免 hls.js 在没有 manifest 的 URL 上反复重试）；
+//     一旦活跃，下一轮 poll 立即 attach + play。
+//   - 不活跃时叠加 overlay 文字（"等待主流到达 / 当前无辅流演示 / 未在会议中"），
+//     比 hls.js 的黑屏重试体验好。
 (function () {
   const stage = document.getElementById('live-stage');
   const v1 = document.getElementById('live-primary');
   const v2 = document.getElementById('live-secondary');
   const overlayP = document.getElementById('live-overlay-primary');
   const overlayS = document.getElementById('live-overlay-secondary');
-  const msgEl    = document.getElementById('live-msg');
   const swapBtn  = document.getElementById('live-swap-btn');
 
   let primarySource   = 'main';
   let secondarySource = 'aux';
   let layout          = 'main-only';
+  let lastStatus      = {};
 
+  // 当前实际 attach 在每个 video 上的源（'main' / 'aux' / null）
+  const attached = { primary: null, secondary: null };
   const hlsInstances = { main: null, aux: null };
-  const sourceVisible = { main: false, aux: false };  // 该源是否有人订阅
 
   function urlFor(srcKey) {
     return `${SRS_BASE}/live/${srcKey === 'main' ? MAIN_KEY : AUX_KEY}.m3u8`;
   }
 
-  function detachStream(srcKey) {
+  function destroyHls(srcKey) {
     if (hlsInstances[srcKey]) {
       try { hlsInstances[srcKey].destroy(); } catch (_) {}
       hlsInstances[srcKey] = null;
     }
   }
 
-  // 把指定源 (main/aux) 加载到指定 video。null 表示解绑。
-  function attachStream(srcKey, video) {
+  // 把 srcKey 流加载到 video 并 play；srcKey=null 表示彻底解绑
+  function loadInto(srcKey, video) {
     if (!srcKey) {
       try { video.pause(); video.removeAttribute('src'); video.load(); } catch (_) {}
       return;
     }
-    detachStream(srcKey);
+    destroyHls(srcKey);
     const url = urlFor(srcKey);
     if (Hls.isSupported()) {
       const hls = new Hls({ liveSyncDurationCount: 2, manifestLoadingMaxRetry: 1 });
       hls.loadSource(url);
       hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        video.play().catch(() => {});
+      });
       hlsInstances[srcKey] = hls;
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
       video.src = url;
+      video.play().catch(() => {});
+    }
+  }
+
+  // 后端状态 → 单源是否"活跃"（值得 attach）
+  function sourceLive(srcKey, d) {
+    if (!d || !d.in_call) return false;
+    if (srcKey === 'main') return !!d.main_file;
+    if (srcKey === 'aux')  return !!(d.has_presentation || d.h239_received || d.aux_recording);
+    return false;
+  }
+
+  // 当前布局是否需要 secondary 槽
+  function layoutNeedsSecondary() {
+    return layout === 'pip' || layout === 'split';
+  }
+
+  // 综合 layout + 状态，决定每个 video 应该承载的源（null = 不该 attach）
+  function targetFor(role) {
+    if (role === 'primary') {
+      if (!primarySource) return null;
+      return sourceLive(primarySource, lastStatus) ? primarySource : null;
+    }
+    // secondary
+    if (!layoutNeedsSecondary()) return null;
+    if (!secondarySource) return null;
+    return sourceLive(secondarySource, lastStatus) ? secondarySource : null;
+  }
+
+  // 单一 reconciler：让实际挂载状态向"目标"收敛
+  function syncStreams() {
+    const tgtP = targetFor('primary');
+    const tgtS = targetFor('secondary');
+    if (attached.primary !== tgtP) {
+      loadInto(tgtP, v1);
+      attached.primary = tgtP;
+    }
+    if (attached.secondary !== tgtS) {
+      loadInto(tgtS, v2);
+      attached.secondary = tgtS;
     }
   }
 
@@ -72,37 +124,30 @@
       if (!primarySource)   primarySource   = 'main';
       if (!secondarySource) secondarySource = (primarySource === 'main') ? 'aux' : 'main';
     }
-    attachStream(primarySource,   v1);
-    attachStream(secondarySource, v2);
+    syncStreams();
     refreshOverlays();
   }
 
   function swapPrimary() {
     if (!secondarySource) return;
     [primarySource, secondarySource] = [secondarySource, primarySource];
-    attachStream(primarySource,   v1);
-    attachStream(secondarySource, v2);
+    syncStreams();
     refreshOverlays();
   }
 
-  // ---- 状态轮询，决定占位提示文案 ----------------------------------
-  // 主层 (overlayP) 关联当前 primary 源；辅层 (overlayS) 关联当前 secondary 源
-  // 文案规则：
-  //   未通话 (in_call=false)            → "当前未在会议中"
-  //   通话中、main_file 空              → "等待主流到达..."
-  //   通话中、has_presentation=false    → "当前无辅流演示"
-  //   通话中、aux 流活跃                → 不显示 overlay (隐藏)
-  let lastStatus = {};
+  // ---- 状态轮询 ----------------------------------------------------------
   async function pollStatus() {
     try {
       const r = await fetch('/api/status', { cache: 'no-store' });
       const j = await r.json();
       if (j.ok) {
         lastStatus = j.data || {};
+        syncStreams();      // 状态变 → 可能要 attach / detach
         refreshOverlays();
       }
     } catch {}
   }
+
   function overlayTextFor(srcKey) {
     if (!srcKey) return '';
     const d = lastStatus;
@@ -110,9 +155,7 @@
     if (srcKey === 'main') {
       return d.main_file ? '' : '等待主流到达…';
     }
-    // aux
-    const auxActive = !!(d.has_presentation || d.h239_received || d.aux_recording);
-    return auxActive ? '' : '当前无辅流演示';
+    return sourceLive('aux', d) ? '' : '当前无辅流演示';
   }
   function setOverlay(el, text) {
     if (!el) return;
@@ -126,8 +169,19 @@
   }
   function refreshOverlays() {
     setOverlay(overlayP, overlayTextFor(primarySource));
-    setOverlay(overlayS, overlayTextFor(secondarySource));
+    // secondary overlay 仅在 layout 用到 secondary 时显示
+    setOverlay(overlayS, layoutNeedsSecondary() ? overlayTextFor(secondarySource) : '');
   }
+
+  // ---- 用户首次交互后取消 primary 静音 ----------------------------------
+  // 浏览器自动播放策略禁止 unmuted autoplay；先 muted autoplay 让画面出来，
+  // 用户随便点一下页面就把声音打开。secondary 永远 muted（小窗 / 副屏不发声）。
+  function unmutePrimary() {
+    try { v1.muted = false; } catch (_) {}
+  }
+  ['pointerdown', 'keydown', 'touchstart'].forEach(ev => {
+    document.addEventListener(ev, unmutePrimary, { once: true, passive: true });
+  });
 
   // ---- 事件 -----------------------------------------------------------
   document.querySelectorAll('#live-layout-segments button').forEach(b => {
