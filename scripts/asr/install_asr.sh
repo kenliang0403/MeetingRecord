@@ -25,6 +25,7 @@ VENV_DIR="/opt/recorder/asr/venv"
 
 echo "[1/6] sanity checks"
 for path in "$SHERPA_BIN_DIR/sherpa-onnx-online-websocket-server" \
+            "$SHERPA_BIN_DIR/sherpa-onnx-offline-punctuation" \
             "$MODEL_DIR/encoder.int8.onnx" \
             "$VENV_DIR/bin/python"; do
     if [ ! -e "$path" ]; then
@@ -37,11 +38,20 @@ $VENV_DIR/bin/python -c "import websockets" || {
     exit 1
 }
 
-echo "[2/6] sync bridge.py to $ASR_BIN_DIR"
+echo "[2/6] sync bridge.py + hotwords to /opt/recorder/asr/"
 SUDO mkdir -p "$ASR_BIN_DIR"
 SUDO chown ftadmin:ftadmin "$ASR_BIN_DIR"
 cp -f "$ASR_SRC/recorder-asr-bridge.py" "$ASR_BIN_DIR/recorder-asr-bridge.py"
 chmod +x "$ASR_BIN_DIR/recorder-asr-bridge.py"
+# hotwords file: install default only if operator hasn't customised it yet
+HOTWORDS_DST=/opt/recorder/asr/models/hotwords.txt
+if [ ! -f "$HOTWORDS_DST" ]; then
+    SUDO cp "$ASR_SRC/hotwords_default.txt" "$HOTWORDS_DST"
+    SUDO chown ftadmin:ftadmin "$HOTWORDS_DST"
+    echo "    → installed default hotwords ($(wc -l < $HOTWORDS_DST) entries)"
+else
+    echo "    → hotwords.txt already present, keeping operator version"
+fi
 
 echo "[3/6] install systemd units"
 SUDO cp "$ASR_SRC/recorder-asr.service" /etc/systemd/system/recorder-asr.service

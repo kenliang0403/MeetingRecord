@@ -54,6 +54,23 @@ CHUNK_BYTES = CHUNK_SAMPLES * 4   # float32
 
 RECONNECT_DELAY = 3.0
 
+# --- Punctuation (best-effort post-process for finals) ----------------
+# Each VAD-final segment is post-processed by spawning a sherpa-onnx
+# offline-punctuation subprocess (~0.5s including model load + 20ms infer).
+# We append the punctuated version as a *separate* JSONL line marked
+# punct=true so the frontend can replace the no-punct line.
+PUNCT_BIN = Path(os.environ.get(
+    "ASR_PUNCT_BIN",
+    "/opt/recorder/asr/tmp/sherpa-onnx-v1.13.0-linux-x64-shared/bin/sherpa-onnx-offline-punctuation"))
+PUNCT_MODEL = Path(os.environ.get(
+    "ASR_PUNCT_MODEL",
+    "/opt/recorder/asr/models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8/model.int8.onnx"))
+SHERPA_LIB = os.environ.get(
+    "ASR_SHERPA_LIB",
+    "/opt/recorder/asr/tmp/sherpa-onnx-v1.13.0-linux-x64-shared/lib")
+PUNCT_TIMEOUT = float(os.environ.get("ASR_PUNCT_TIMEOUT", "8.0"))
+PUNCT_ENABLED = PUNCT_BIN.is_file() and PUNCT_MODEL.is_file()
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -158,11 +175,81 @@ async def feeder(ws, ff_stdout):
         await ws.send(struct.pack("<i", n) + raw[: n * 4])
 
 
+async def punctuate(text):
+    """Spawn sherpa-onnx-offline-punctuation, return punctuated text or None.
+
+    Failure modes (binary missing, model missing, timeout, non-zero exit,
+    parse error) all collapse to None — caller falls back to original text.
+
+    Subprocess output looks like:
+        ...
+        Input text: <original>
+        <punctuated>
+        Output text:
+    so we grab the line after "Input text:".
+    """
+    if not PUNCT_ENABLED:
+        return None
+    env = os.environ.copy()
+    env["LD_LIBRARY_PATH"] = SHERPA_LIB + ":" + env.get("LD_LIBRARY_PATH", "")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            str(PUNCT_BIN),
+            f"--ct-transformer={PUNCT_MODEL}",
+            "--num-threads=2",
+            text,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=env,
+        )
+    except Exception as e:
+        log.warning("punct subprocess spawn failed: %r", e)
+        return None
+    try:
+        stdout, _ = await asyncio.wait_for(
+            proc.communicate(), timeout=PUNCT_TIMEOUT)
+    except asyncio.TimeoutError:
+        try: proc.kill()
+        except Exception: pass
+        log.warning("punct timeout (%.1fs) — text len=%d", PUNCT_TIMEOUT, len(text))
+        return None
+    if proc.returncode != 0:
+        return None
+    out = stdout.decode("utf-8", "replace")
+    lines = out.splitlines()
+    for i, line in enumerate(lines):
+        if "Input text:" in line and i + 1 < len(lines):
+            return lines[i + 1].strip()
+    return None
+
+
+async def punct_and_write(text, seg, meeting_id):
+    """Fire-and-forget task: punctuate one final and append a new JSONL line.
+
+    Marked with `punct=true` and `replaces_segment=<seg>` so the frontend
+    can identify it as a refinement of a previously-shown final and overwrite
+    the existing caption.
+    """
+    punct_text = await punctuate(text)
+    if not punct_text or punct_text == text:
+        return
+    write_transcript_line({
+        "t": time.time(),
+        "text": punct_text,
+        "is_final": True,
+        "punct": True,
+        "segment": seg,
+        "replaces_segment": seg,
+        "meeting_id": meeting_id,
+    })
+
+
 async def receiver(ws):
     """Consume sherpa JSON messages and persist them.
 
     sherpa pushes both partial (`is_final=false`) and final (`is_final=true`)
     transcripts. We log both — the SSE consumer in Flask will collapse partials.
+    For every final we also schedule an async punctuation task.
     """
     while True:
         try:
@@ -179,17 +266,23 @@ async def receiver(ws):
         text = (d.get("text") or "").strip()
         if not text:
             continue
+        is_final = bool(d.get("is_final", False))
+        seg = int(d.get("segment", 0))
+        meeting_id = query_meeting_id()
         payload = {
             "t": time.time(),
             "text": text,
-            "is_final": bool(d.get("is_final", False)),
-            "segment": int(d.get("segment", 0)),
+            "is_final": is_final,
+            "segment": seg,
             "tokens": d.get("tokens") or [],
             "timestamps": d.get("timestamps") or [],
             "start_time": d.get("start_time"),
-            "meeting_id": query_meeting_id(),
+            "meeting_id": meeting_id,
         }
         write_transcript_line(payload)
+        if is_final:
+            # Schedule punct in the background; don't block the receiver loop.
+            asyncio.create_task(punct_and_write(text, seg, meeting_id))
 
 
 async def session_once():
@@ -243,6 +336,7 @@ async def main():
     log.info("  SRS_URL=%s", SRS_URL)
     log.info("  ASR_WS_URL=%s", ASR_WS_URL)
     log.info("  RUN_DIR=%s  RECORDINGS_DIR=%s", RUN_DIR, RECORDINGS_DIR)
+    log.info("  PUNCT_ENABLED=%s  PUNCT_MODEL=%s", PUNCT_ENABLED, PUNCT_MODEL)
 
     while True:
         try:
