@@ -1,0 +1,22 @@
+[Unit]
+Description=Recorder ASR bridge: SRS audio → sherpa-onnx → transcript JSONL
+After=recorder-asr.service network-online.target
+Wants=recorder-asr.service network-online.target
+
+[Service]
+Type=simple
+User=ftadmin
+Group=ftadmin
+Environment=ASR_SRS_URL=http://127.0.0.1:8080/live/recorder-main.flv
+Environment=ASR_WS_URL=ws://127.0.0.1:6006
+Environment=ASR_RUN_DIR=/opt/recorder/run
+Environment=RECORDINGS_DIR=/opt/recorder/recordings
+ExecStart=/opt/recorder/asr/venv/bin/python /opt/recorder/asr/bridge/recorder-asr-bridge.py
+Restart=always
+RestartSec=3
+# stdout/stderr go to journald
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

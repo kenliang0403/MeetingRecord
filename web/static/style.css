@@ -531,6 +531,36 @@ canvas    { background: #11141a; border-radius: 4px; }
   z-index: 3;
 }
 .stage-overlay.show { opacity: 1; }
+
+/* live 页：ASR 实时字幕条（右下到中下，覆盖在视频上） */
+.live-caption {
+  position: absolute;
+  left: 50%;
+  bottom: 6%;
+  transform: translateX(-50%);
+  max-width: 92%;
+  text-align: center;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  padding: 8px 18px;
+  border-radius: 6px;
+  font-size: 18px;
+  line-height: 1.4;
+  font-weight: 500;
+  pointer-events: none;
+  user-select: none;
+  z-index: 6;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  transition: opacity 0.2s, background-color 0.2s;
+}
+.live-caption:empty { display: none; }
+/* final 一句确定后稍微调亮，提示用户这句已稳定 */
+.live-caption.final {
+  background: rgba(15, 60, 30, 0.78);
+}
+.live-caption.disconnected {
+  background: rgba(150, 40, 40, 0.7);
+}
 /* split 模式下辅层只盖右半边 */
 .play-stage.layout-split .overlay-secondary {
   left: 50%;

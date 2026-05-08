@@ -195,4 +195,37 @@
   applyLayout();
   pollStatus();
   setInterval(pollStatus, 2000);
+
+  // ---- ASR 实时字幕（SSE）-------------------------------------------------
+  // 后端 /api/transcript/stream 推送 sherpa-onnx 的 partial / final JSON。
+  // partial: 不断变化的当前句子，覆盖显示
+  // final:   一句结束（VAD endpoint），固定在屏幕上一会儿再清空
+  const captionEl = document.getElementById('live-caption');
+  if (captionEl && typeof EventSource !== 'undefined') {
+    let finalFadeTimer = null;
+    let lastSegment = -1;
+    const es = new EventSource('/api/transcript/stream');
+    es.onmessage = (ev) => {
+      let d;
+      try { d = JSON.parse(ev.data); } catch { return; }
+      const text = d.text || '';
+      if (!text) return;
+      if (finalFadeTimer) { clearTimeout(finalFadeTimer); finalFadeTimer = null; }
+      captionEl.textContent = text;
+      captionEl.classList.toggle('final', !!d.is_final);
+      if (d.is_final) {
+        // 一句确定后保留 4s 让人看清，期间被新 partial 覆盖也无所谓
+        finalFadeTimer = setTimeout(() => {
+          captionEl.textContent = '';
+          captionEl.classList.remove('final');
+        }, 4000);
+      }
+      lastSegment = d.segment;
+    };
+    es.onerror = () => {
+      // EventSource 自动重连；只在前端做软提示
+      captionEl.classList.add('disconnected');
+      setTimeout(() => captionEl.classList.remove('disconnected'), 1000);
+    };
+  }
 })();

@@ -11,6 +11,7 @@ Endpoints:
   GET  /recordings       回放索引（直接扫盘）
   GET  /recordings/<m>   单会议回放页
   GET  /play/<m>/<f>     文件 (Range supported)
+  GET  /api/transcript/stream   SSE 推送 ASR 实时字幕（live 页面订阅）
 
 API (login required):
   GET  /api/status
@@ -27,12 +28,13 @@ API (login required):
 import json
 import os
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    session, flash, jsonify, send_file, abort,
+    session, flash, jsonify, send_file, abort, Response,
 )
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -44,6 +46,8 @@ from recorder_client import RecorderClient  # noqa: E402
 
 RECORDINGS_DIR = os.environ.get("RECORDINGS_DIR", "/opt/recorder/recordings")
 CONFIG_PATH    = os.environ.get("CONFIG_PATH",    "/opt/recorder/config/config.json")
+TRANSCRIPT_LIVE = Path(os.environ.get(
+    "TRANSCRIPT_LIVE_FILE", "/opt/recorder/run/transcript.jsonl"))
 RECORDER_UNIT  = os.environ.get("RECORDER_UNIT",  "recorder-core.service")
 SRS_HOST       = os.environ.get("SRS_HOST", "")  # 空字符串=用 request.host (浏览器视角)
 SRS_PORT       = int(os.environ.get("SRS_PORT", "8080"))
@@ -361,6 +365,63 @@ def config_restart():
     except OSError as e:
         flash(f"重启请求失败：{e}", "error")
     return redirect(url_for("config_page"))
+
+
+# --- ASR transcript SSE -----------------------------------------------------
+# recorder-asr-bridge appends one JSONL line per ASR update (partial or final)
+# to /opt/recorder/run/transcript.jsonl. We tail it and push each line as a
+# Server-Sent Events 'data:' frame so live.js can render captions.
+# New connections start at the *end* of the file — clients don't get history.
+
+@app.route("/api/transcript/stream")
+@login_required
+def transcript_stream():
+    def gen():
+        path = TRANSCRIPT_LIVE
+        # 文件可能还不存在（bridge 还没写过任何字幕）；轮询等待
+        try:
+            pos = path.stat().st_size
+        except (OSError, FileNotFoundError):
+            pos = 0
+
+        last_keepalive = time.time()
+        # 立即发一个 hello 让 EventSource onopen 触发，便于前端区分"连上"和"断开"
+        yield ": hello\n\n"
+
+        while True:
+            try:
+                size = path.stat().st_size
+            except (OSError, FileNotFoundError):
+                size = 0
+                pos = 0   # 文件被删/轮转，从头开始
+            if size < pos:
+                # 文件被截断（清空）：从 0 重新开始
+                pos = 0
+            if size > pos:
+                try:
+                    with path.open("rb") as f:
+                        f.seek(pos)
+                        chunk = f.read(size - pos)
+                    pos = size
+                    for raw in chunk.splitlines():
+                        line = raw.strip()
+                        if line:
+                            yield f"data: {line.decode('utf-8', 'replace')}\n\n"
+                    last_keepalive = time.time()
+                    continue
+                except OSError:
+                    pass
+            # 没新内容：必要时发心跳
+            if time.time() - last_keepalive > 25:
+                yield ": ping\n\n"
+                last_keepalive = time.time()
+            time.sleep(0.25)
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",   # 防止反代 buffer 推送
+    }
+    return Response(gen(), mimetype="text/event-stream", headers=headers)
 
 
 # --- Recordings: scan filesystem directly (independent of recorder-core) ----

@@ -1,0 +1,26 @@
+[Unit]
+Description=sherpa-onnx streaming ASR websocket server (Chinese zipformer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ftadmin
+Group=ftadmin
+Environment=SHERPA_DIR=/opt/recorder/asr/tmp/sherpa-onnx-v1.13.0-linux-x64-shared
+Environment=MODEL_DIR=/opt/recorder/asr/models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30
+Environment=LD_LIBRARY_PATH=/opt/recorder/asr/tmp/sherpa-onnx-v1.13.0-linux-x64-shared/lib
+ExecStart=/opt/recorder/asr/tmp/sherpa-onnx-v1.13.0-linux-x64-shared/bin/sherpa-onnx-online-websocket-server \
+    --port=6006 \
+    --num-work-threads=2 \
+    --num-io-threads=2 \
+    --tokens=/opt/recorder/asr/models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/tokens.txt \
+    --encoder=/opt/recorder/asr/models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/encoder.int8.onnx \
+    --decoder=/opt/recorder/asr/models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/decoder.onnx \
+    --joiner=/opt/recorder/asr/models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/joiner.int8.onnx \
+    --provider=cpu
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
