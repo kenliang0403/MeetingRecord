@@ -561,6 +561,38 @@ canvas    { background: #11141a; border-radius: 4px; }
 .live-caption.disconnected {
   background: rgba(150, 40, 40, 0.7);
 }
+
+/* 会议纪要（LLM 生成） */
+.summary-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.summary-header h3 { margin: 0; }
+.summary-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.summary-toolbar .muted { font-size: 13px; }
+.summary-output {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei",
+               "Segoe UI", Roboto, sans-serif;
+  background: #f8fafc;
+  padding: 16px 22px;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  margin-top: 14px;
+  line-height: 1.7;
+  font-size: 14px;
+  color: #1f2937;
+  min-height: 0;
+}
+.summary-output:empty { display: none; }
 /* split 模式下辅层只盖右半边 */
 .play-stage.layout-split .overlay-secondary {
   left: 50%;

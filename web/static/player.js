@@ -271,4 +271,63 @@
 
   applyLayout();
   refreshPlaylist();
+
+  // --- ASR 字幕回放同步（按主流 currentTime）--------------------------
+  // /recordings/<m>/transcript.json 返回的 items 已经按 meeting_offset_s 排序，
+  // 每条对应主流 timeline 上的一句（punct 优先于 raw）。这里 binary-search
+  // 当前主流时刻最近的一句显示。CAPTION_HOLD_S 之外不显示（避免上一句挂太久）。
+  const captionEl = document.getElementById('replay-caption');
+  if (captionEl && window.TRANSCRIPT_URL && HAS_TIME_DATA) {
+    let captions = [];
+    let lastIdx = -1;
+    const HOLD_S = 8;
+
+    fetch(window.TRANSCRIPT_URL)
+      .then(r => r.json())
+      .then(j => {
+        if (j && j.ok && Array.isArray(j.items)) {
+          captions = j.items;
+        }
+      })
+      .catch(() => {});
+
+    function findCaptionAt(s) {
+      let lo = 0, hi = captions.length - 1, found = -1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (captions[mid].meeting_offset_s <= s) { found = mid; lo = mid + 1; }
+        else { hi = mid - 1; }
+      }
+      return found;
+    }
+
+    function updateCaption() {
+      if (!captions.length) return;
+      const mainSrc = sources.main;
+      if (!mainSrc.video) return;
+      const seg = MAIN[mainSrc.idx];
+      if (!seg || seg.meeting_offset_ms == null) return;
+      const meetingS = (seg.meeting_offset_ms + mainSrc.video.currentTime * 1000) / 1000;
+      const idx = findCaptionAt(meetingS);
+      if (idx < 0 || meetingS - captions[idx].meeting_offset_s > HOLD_S) {
+        if (captionEl.textContent) {
+          captionEl.textContent = '';
+          captionEl.classList.remove('final');
+        }
+        lastIdx = -1;
+        return;
+      }
+      if (idx !== lastIdx) {
+        const c = captions[idx];
+        captionEl.textContent = c.text;
+        captionEl.classList.toggle('final', !!c.punct);
+        lastIdx = idx;
+      }
+    }
+
+    ['timeupdate', 'seeked', 'play', 'pause'].forEach(ev => {
+      v1.addEventListener(ev, updateCaption);
+      v2.addEventListener(ev, updateCaption);
+    });
+  }
 })();

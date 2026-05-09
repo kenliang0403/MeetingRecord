@@ -12,6 +12,9 @@ Endpoints:
   GET  /recordings/<m>   单会议回放页
   GET  /play/<m>/<f>     文件 (Range supported)
   GET  /api/transcript/stream   SSE 推送 ASR 实时字幕（live 页面订阅）
+  GET  /recordings/<m>/transcript.json   回放页字幕同步用（按 meeting timeline）
+  GET  /recordings/<m>/summary           读已生成的会议纪要 markdown
+  POST /recordings/<m>/summary           调 LLM 生成会议纪要并保存 summary.md
 
 API (login required):
   GET  /api/status
@@ -29,6 +32,8 @@ import json
 import os
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -173,6 +178,12 @@ EDITABLE_FIELDS = [
     ("__group_stream", "直播推流（SRS）", None, None, None),
     ("stream_enabled",  "启用直播",     "checkbox", ("streaming", "enabled"),  ""),
     ("stream_push_aux", "包含辅流（演示）", "checkbox", ("streaming", "push_aux"), ""),
+
+    # ── 大模型（生成会议纪要用） ──────────────────────────────────
+    ("__group_llm", "大模型 API（会议纪要后处理用）", None, None, None),
+    ("llm_base_url", "Base URL",   "text",     ("llm", "base_url"), "例如 https://api.deepseek.com（OpenAI 兼容协议）"),
+    ("llm_api_key",  "API Key",    "password", ("llm", "api_key"),  "留空保留原值；输入新值覆盖"),
+    ("llm_model",    "模型名",     "text",     ("llm", "model"),    "例如 deepseek-chat"),
 
     # ── 杂项 ────────────────────────────────────────────────────
     ("__group_misc", "其它", None, None, None),
@@ -555,6 +566,281 @@ def meeting_page(meeting_dir):
         meeting_t0_ms=t0,
         meeting_json=meeting_json,
     )
+
+
+@app.route("/recordings/<meeting_dir>/transcript.json")
+@login_required
+def meeting_transcript(meeting_dir):
+    """Return final ASR transcripts for a meeting, aligned to its timeline.
+
+    Reads /opt/recorder/recordings/<m>/transcript.jsonl produced by
+    recorder-asr-bridge. Each `is_final` line is kept; if a `punct=true`
+    refinement of the same segment exists later in the file, the raw
+    pre-punct line is dropped (we want the polished version on replay).
+
+    `meeting_offset_s` is computed against the earliest main_*.mp4 segment's
+    wall_start_ms (same anchor as the player's seg meeting_offset_ms), so
+    captions line up with the mp4 timeline directly.
+    """
+    base = Path(RECORDINGS_DIR)
+    target = (base / meeting_dir).resolve()
+    if not str(target).startswith(str(base.resolve())):
+        abort(404)
+    if not target.exists() or not target.is_dir():
+        abort(404)
+
+    jsonl = target / "transcript.jsonl"
+    if not jsonl.exists():
+        return jsonify({"ok": True, "items": [], "t0_ms": None})
+
+    t0_ms = None
+    mj = target / "meeting.json"
+    if mj.exists():
+        try:
+            data = json.loads(mj.read_text(encoding="utf-8"))
+            starts = [
+                s.get("wall_start_ms")
+                for s in (data.get("segments") or [])
+                if (s.get("file") or "").startswith("main_") and s.get("wall_start_ms")
+            ]
+            if starts:
+                t0_ms = min(starts)
+        except Exception:
+            pass
+
+    finals = []
+    try:
+        with jsonl.open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    d = json.loads(line)
+                except Exception:
+                    continue
+                if not d.get("is_final"):
+                    continue
+                finals.append(d)
+    except OSError:
+        return jsonify({"ok": False, "error": "read transcript failed"}), 500
+
+    # 后到的 punct 版本替换之前同一 segment 的 raw 版本（最近一条）
+    superseded = set()
+    for i, d in enumerate(finals):
+        if not d.get("punct"):
+            continue
+        seg = d.get("replaces_segment", d.get("segment"))
+        for j in range(i - 1, -1, -1):
+            if j in superseded:
+                continue
+            if finals[j].get("punct"):
+                continue
+            if finals[j].get("segment") == seg:
+                superseded.add(j)
+                break
+
+    items = []
+    first_t = finals[0]["t"] if finals else 0.0
+    for i, d in enumerate(finals):
+        if i in superseded:
+            continue
+        t = float(d.get("t", 0.0))
+        if t0_ms is not None:
+            offset_s = t - (t0_ms / 1000.0)
+        else:
+            offset_s = t - first_t
+        items.append({
+            "t": t,
+            "meeting_offset_s": round(offset_s, 3),
+            "text": d.get("text", ""),
+            "punct": bool(d.get("punct", False)),
+            "segment": d.get("segment", -1),
+        })
+    items.sort(key=lambda x: x["meeting_offset_s"])
+
+    return jsonify({"ok": True, "items": items, "t0_ms": t0_ms})
+
+
+# --- LLM-driven meeting summary --------------------------------------------
+# 通用 OpenAI 兼容协议 /v1/chat/completions，支持 DeepSeek / 通义 / 火山等。
+# 不引入 requests 依赖，纯 stdlib urllib。
+
+def _llm_chat_complete(base_url, api_key, model, messages, timeout=180):
+    """Call OpenAI-compatible chat completions. Returns (text, error_str)."""
+    url = base_url.rstrip("/") + "/v1/chat/completions"
+    body = json.dumps({
+        "model": model,
+        "messages": messages,
+        "stream": False,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = e.read().decode("utf-8", "replace")[:500]
+        except Exception:
+            err_body = ""
+        return None, f"HTTP {e.code}: {err_body or e.reason}"
+    except urllib.error.URLError as e:
+        return None, f"网络错误：{e.reason}"
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None, f"响应不是 JSON：{raw[:300]}"
+    if "error" in data:
+        return None, f"API 返回错误：{data['error']}"
+    try:
+        return data["choices"][0]["message"]["content"], None
+    except (KeyError, IndexError, TypeError):
+        return None, f"响应字段缺失：{raw[:300]}"
+
+
+def _read_meeting_finals(meeting_dir_path):
+    """Return (sentences, meeting_name). punct 优先替换 raw。"""
+    jsonl = meeting_dir_path / "transcript.jsonl"
+    if not jsonl.exists():
+        return [], ""
+    finals = []
+    with jsonl.open(encoding="utf-8") as f:
+        for line in f:
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            if not d.get("is_final"):
+                continue
+            finals.append(d)
+    superseded = set()
+    for i, d in enumerate(finals):
+        if not d.get("punct"):
+            continue
+        seg = d.get("replaces_segment", d.get("segment"))
+        for j in range(i - 1, -1, -1):
+            if j in superseded or finals[j].get("punct"):
+                continue
+            if finals[j].get("segment") == seg:
+                superseded.add(j)
+                break
+    sentences = [
+        finals[i].get("text", "").strip()
+        for i in range(len(finals))
+        if i not in superseded and finals[i].get("text")
+    ]
+    meeting_name = ""
+    mj = meeting_dir_path / "meeting.json"
+    if mj.exists():
+        try:
+            meeting_name = (json.loads(mj.read_text(encoding="utf-8"))
+                            .get("meeting_name") or "")
+        except Exception:
+            pass
+    return sentences, meeting_name
+
+
+@app.route("/recordings/<meeting_dir>/summary", methods=["GET"])
+@login_required
+def get_meeting_summary(meeting_dir):
+    base = Path(RECORDINGS_DIR)
+    target = (base / meeting_dir).resolve()
+    if not str(target).startswith(str(base.resolve())):
+        abort(404)
+    if not target.exists():
+        abort(404)
+    p = target / "summary.md"
+    if not p.exists():
+        return jsonify({"ok": True, "exists": False, "text": ""})
+    try:
+        return jsonify({"ok": True, "exists": True,
+                        "text": p.read_text(encoding="utf-8"),
+                        "mtime": p.stat().st_mtime})
+    except OSError as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/recordings/<meeting_dir>/summary", methods=["POST"])
+@login_required
+def generate_meeting_summary(meeting_dir):
+    """Call configured LLM to produce a meeting summary from transcript.jsonl."""
+    base = Path(RECORDINGS_DIR)
+    target = (base / meeting_dir).resolve()
+    if not str(target).startswith(str(base.resolve())):
+        abort(404)
+    if not target.exists() or not target.is_dir():
+        abort(404)
+
+    try:
+        cfg = json.loads(Path(CONFIG_PATH).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        return jsonify({"ok": False, "error": f"读 config 失败：{e}"}), 500
+    llm = cfg.get("llm", {}) or {}
+    base_url = (llm.get("base_url") or "").strip()
+    api_key  = (llm.get("api_key")  or "").strip()
+    model    = (llm.get("model")    or "").strip()
+    if not (base_url and api_key and model):
+        return jsonify({
+            "ok": False,
+            "error": "请先在【配置】页填写 LLM Base URL / API Key / 模型名",
+        }), 400
+
+    sentences, meeting_name = _read_meeting_finals(target)
+    if not sentences:
+        return jsonify({"ok": False,
+                        "error": "该会议没有可用的 ASR 转录（transcript.jsonl 不存在或为空）"}), 400
+    full_text = "\n".join(sentences)
+
+    system_prompt = (
+        "你是会议纪要助手。用户会提供一份语音识别（ASR）的转录文本，"
+        "请基于它生成结构化的会议纪要。\n\n"
+        "注意：ASR 可能存在错字、缺字（如人名/术语的同音字错误），"
+        "请基于上下文推断纠正后再写纪要，不要原样照抄明显错的字。\n\n"
+        "输出严格使用 Markdown 格式，包含以下小节（无内容的小节直接省略）：\n\n"
+        "## 会议主题\n"
+        "## 参会人员\n"
+        "## 议题与讨论要点\n"
+        "## 决议与结论\n"
+        "## 行动项（负责人 / 时限）\n"
+        "## 备注\n"
+    )
+    user_prompt = (
+        f"会议名称：{meeting_name or meeting_dir}\n\n"
+        f"ASR 转录全文（按时间顺序，每行一句）：\n\n{full_text}"
+    )
+
+    text, err = _llm_chat_complete(
+        base_url, api_key, model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt},
+        ],
+        timeout=180,
+    )
+    if err:
+        return jsonify({"ok": False, "error": f"LLM 调用失败：{err}"}), 502
+
+    out = target / "summary.md"
+    try:
+        tmp = str(out) + ".tmp"
+        Path(tmp).write_text(text or "", encoding="utf-8")
+        os.replace(tmp, str(out))
+    except OSError as e:
+        return jsonify({"ok": False, "error": f"写 summary.md 失败：{e}"}), 500
+
+    return jsonify({
+        "ok": True,
+        "text": text,
+        "transcript_lines": len(sentences),
+        "model": model,
+    })
 
 
 @app.route("/play/<meeting_dir>/<fname>")

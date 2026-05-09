@@ -15,6 +15,8 @@
 <div class="play-stage" id="stage">
   <video id="vid-primary"   controls playsinline preload="metadata"></video>
   <video id="vid-secondary"          playsinline preload="metadata"></video>
+  <!-- ASR 字幕（按主流 currentTime 同步显示）-->
+  <div class="live-caption" id="replay-caption"></div>
 </div>
 
 <div class="play-bar">
@@ -73,6 +75,18 @@
   {% endif %}
 </div>
 
+{# --- 会议纪要（LLM 生成） ----------------------------------------- #}
+<section class="card mt" id="summary-section">
+  <div class="summary-header">
+    <h3>会议纪要</h3>
+    <div class="summary-toolbar">
+      <button type="button" id="summary-btn" class="btn btn-primary">生成纪要</button>
+      <span id="summary-status" class="muted"></span>
+    </div>
+  </div>
+  <div id="summary-output" class="summary-output"></div>
+</section>
+
 {% if meeting_json %}
 <details class="advanced-mode">
   <summary>meeting.json</summary>
@@ -84,7 +98,68 @@
   window.MAIN_SEGMENTS = {{ main_segments | tojson }};
   window.AUX_SEGMENTS  = {{ aux_segments  | tojson }};
   window.MEETING_T0_MS = {{ meeting_t0_ms | tojson }};
+  window.TRANSCRIPT_URL = "{{ url_for('meeting_transcript', meeting_dir=meeting_dir) }}";
 </script>
 <script src="{{ url_for('static', filename='player.js') }}"></script>
+
+<script>
+(function() {
+  const meetingDir = {{ meeting_dir | tojson }};
+  const btn = document.getElementById('summary-btn');
+  const out = document.getElementById('summary-output');
+  const statusEl = document.getElementById('summary-status');
+  if (!btn || !out) return;
+
+  function fmtDate(ts) {
+    try { return new Date(ts * 1000).toLocaleString(); } catch { return ''; }
+  }
+
+  async function loadExisting() {
+    try {
+      const r = await fetch(`/recordings/${encodeURIComponent(meetingDir)}/summary`);
+      const j = await r.json();
+      if (j && j.ok && j.exists && j.text) {
+        out.textContent = j.text;
+        statusEl.textContent = `已有纪要（${fmtDate(j.mtime)}）`;
+        btn.textContent = '重新生成';
+      } else {
+        statusEl.textContent = '尚未生成。点击按钮调用 LLM 生成。';
+      }
+    } catch (e) {
+      statusEl.textContent = `加载失败：${e.message}`;
+    }
+  }
+
+  async function generate() {
+    if (!confirm('调用 LLM 生成会议纪要？这会读取 transcript.jsonl 全文上送到配置的 LLM API（约 30-90 秒）。')) {
+      return;
+    }
+    btn.disabled = true;
+    const oldText = btn.textContent;
+    btn.textContent = '生成中…';
+    statusEl.textContent = '调 LLM 中，请耐心等待（30-90 秒）...';
+    try {
+      const r = await fetch(`/recordings/${encodeURIComponent(meetingDir)}/summary`, { method: 'POST' });
+      const j = await r.json();
+      if (j && j.ok) {
+        out.textContent = j.text || '';
+        statusEl.textContent = `生成完成（${j.transcript_lines} 句转录，模型 ${j.model}）`;
+        btn.textContent = '重新生成';
+      } else {
+        statusEl.textContent = `失败：${(j && j.error) || '未知错误'}`;
+        btn.textContent = oldText;
+      }
+    } catch (e) {
+      statusEl.textContent = `网络异常：${e.message}`;
+      btn.textContent = oldText;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  btn.addEventListener('click', generate);
+  loadExisting();
+})();
+</script>
 {% endif %}
 {% endblock %}
