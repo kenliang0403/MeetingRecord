@@ -75,7 +75,25 @@
   {% endif %}
 </div>
 
-{# --- 会议纪要（LLM 生成） ----------------------------------------- #}
+{# --- 字幕优化 + 会议纪要（LLM 后处理）------------------------------- #}
+<section class="card mt" id="refine-section">
+  <div class="summary-header">
+    <h3>字幕优化（LLM 保守纠错）</h3>
+    <div class="summary-toolbar">
+      <button type="button" id="refine-btn" class="btn">运行字幕优化</button>
+      <label class="refine-toggle" title="切换原始 ASR 文本 / LLM 优化版（仅在已优化后可用）">
+        <input type="checkbox" id="refine-toggle"> <span>用优化版回放</span>
+      </label>
+      <span id="refine-status" class="muted"></span>
+    </div>
+  </div>
+  <p class="muted refine-note">
+    把字幕全文上送 LLM，仅修复明显的同音字和补全标点；不修改数字/人名/语义/事实，
+    不合并或拆分句子。原始 transcript.jsonl 永不改动，结果存到 transcript.refined.jsonl。
+    切换 toggle 决定回放页字幕用哪一版。
+  </p>
+</section>
+
 <section class="card mt" id="summary-section">
   <div class="summary-header">
     <h3>会议纪要</h3>
@@ -159,6 +177,71 @@
 
   btn.addEventListener('click', generate);
   loadExisting();
+})();
+
+// 字幕优化（refine）UI
+(function() {
+  const meetingDir = {{ meeting_dir | tojson }};
+  const rBtn = document.getElementById('refine-btn');
+  const rStatus = document.getElementById('refine-status');
+  const rToggle = document.getElementById('refine-toggle');
+  if (!rBtn) return;
+
+  // 初始：检查 transcript.json 是否报告 has_refined
+  async function refreshRefineState() {
+    try {
+      const r = await fetch(`/recordings/${encodeURIComponent(meetingDir)}/transcript.json?refined=0`);
+      const j = await r.json();
+      if (j && j.ok) {
+        if (j.has_refined) {
+          rStatus.textContent = '已有优化版（toggle 切换）';
+          rBtn.textContent = '重新优化';
+          rToggle.disabled = false;
+          rToggle.checked = true;
+        } else {
+          rStatus.textContent = `共 ${j.items.length} 句字幕，可运行 LLM 优化`;
+          rToggle.disabled = true;
+          rToggle.checked = false;
+        }
+      }
+    } catch {}
+  }
+
+  async function runRefine() {
+    if (!confirm('把字幕全文（约 ' + (window._lastTranscriptLines || '?') + ' 句）上送 LLM 做保守纠错？\n\n原始 transcript.jsonl 不会被改动。')) return;
+    rBtn.disabled = true;
+    const oldText = rBtn.textContent;
+    rBtn.textContent = '优化中…';
+    rStatus.textContent = '调 LLM 中（30-90 秒）...';
+    try {
+      const r = await fetch(`/recordings/${encodeURIComponent(meetingDir)}/transcript/refine`, { method: 'POST' });
+      const j = await r.json();
+      if (j && j.ok) {
+        rStatus.textContent = `已完成：${j.lines_changed}/${j.lines_total} 句被修订（模型 ${j.model}）`;
+        rBtn.textContent = '重新优化';
+        rToggle.disabled = false;
+        rToggle.checked = true;
+        // 刷新页面重新加载字幕（用 refined 版）
+        if (window.player_reloadCaptions) window.player_reloadCaptions(true);
+      } else {
+        rStatus.textContent = `失败：${(j && j.error) || '未知错误'}`;
+        rBtn.textContent = oldText;
+      }
+    } catch (e) {
+      rStatus.textContent = `网络异常：${e.message}`;
+      rBtn.textContent = oldText;
+    } finally {
+      rBtn.disabled = false;
+    }
+  }
+
+  // toggle 切换：重新 fetch 字幕（refined=0/1）
+  rToggle.addEventListener('change', () => {
+    if (window.player_reloadCaptions) window.player_reloadCaptions(rToggle.checked);
+  });
+
+  rBtn.addEventListener('click', runRefine);
+  refreshRefineState();
 })();
 </script>
 {% endif %}

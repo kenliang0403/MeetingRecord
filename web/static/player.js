@@ -276,20 +276,27 @@
   // /recordings/<m>/transcript.json 返回的 items 已经按 meeting_offset_s 排序，
   // 每条对应主流 timeline 上的一句（punct 优先于 raw）。这里 binary-search
   // 当前主流时刻最近的一句显示。CAPTION_HOLD_S 之外不显示（避免上一句挂太久）。
+  // 暴露 window.player_reloadCaptions(useRefined) 让 refine UI 切换 raw/refined。
   const captionEl = document.getElementById('replay-caption');
   if (captionEl && window.TRANSCRIPT_URL && HAS_TIME_DATA) {
     let captions = [];
     let lastIdx = -1;
     const HOLD_S = 8;
 
-    fetch(window.TRANSCRIPT_URL)
-      .then(r => r.json())
-      .then(j => {
-        if (j && j.ok && Array.isArray(j.items)) {
-          captions = j.items;
-        }
-      })
-      .catch(() => {});
+    function loadCaptions(useRefined) {
+      const url = window.TRANSCRIPT_URL + (useRefined === false ? '?refined=0' : '?refined=1');
+      return fetch(url)
+        .then(r => r.json())
+        .then(j => {
+          captions = (j && j.ok && Array.isArray(j.items)) ? j.items : [];
+          lastIdx = -1;
+          captionEl.textContent = '';
+          captionEl.classList.remove('final');
+        })
+        .catch(() => {});
+    }
+    window.player_reloadCaptions = loadCaptions;
+    loadCaptions(true);   // 优先 refined（如有），否则 endpoint 自然回退到 raw
 
     function findCaptionAt(s) {
       let lo = 0, hi = captions.length - 1, found = -1;

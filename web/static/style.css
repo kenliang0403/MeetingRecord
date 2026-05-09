@@ -593,6 +593,25 @@ canvas    { background: #11141a; border-radius: 4px; }
   min-height: 0;
 }
 .summary-output:empty { display: none; }
+
+/* 字幕优化（refine）控件 */
+.refine-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #4b5563;
+  cursor: pointer;
+  user-select: none;
+}
+.refine-toggle input[type=checkbox] { margin: 0; }
+.refine-toggle input[type=checkbox]:disabled + span { color: #9ca3af; }
+.refine-note {
+  margin-top: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #6b7280;
+}
 /* split 模式下辅层只盖右半边 */
 .play-stage.layout-split .overlay-secondary {
   left: 50%;

@@ -13,6 +13,7 @@ Endpoints:
   GET  /play/<m>/<f>     文件 (Range supported)
   GET  /api/transcript/stream   SSE 推送 ASR 实时字幕（live 页面订阅）
   GET  /recordings/<m>/transcript.json   回放页字幕同步用（按 meeting timeline）
+  POST /recordings/<m>/transcript/refine 调 LLM 保守纠错字幕→ transcript.refined.jsonl
   GET  /recordings/<m>/summary           读已生成的会议纪要 markdown
   POST /recordings/<m>/summary           调 LLM 生成会议纪要并保存 summary.md
 
@@ -568,46 +569,33 @@ def meeting_page(meeting_dir):
     )
 
 
-@app.route("/recordings/<meeting_dir>/transcript.json")
-@login_required
-def meeting_transcript(meeting_dir):
-    """Return final ASR transcripts for a meeting, aligned to its timeline.
+def _read_meeting_t0_ms(target_dir):
+    """Earliest main_*.mp4 wall_start_ms from meeting.json (or None)."""
+    mj = target_dir / "meeting.json"
+    if not mj.exists():
+        return None
+    try:
+        data = json.loads(mj.read_text(encoding="utf-8"))
+        starts = [
+            s.get("wall_start_ms")
+            for s in (data.get("segments") or [])
+            if (s.get("file") or "").startswith("main_") and s.get("wall_start_ms")
+        ]
+        return min(starts) if starts else None
+    except Exception:
+        return None
 
-    Reads /opt/recorder/recordings/<m>/transcript.jsonl produced by
-    recorder-asr-bridge. Each `is_final` line is kept; if a `punct=true`
-    refinement of the same segment exists later in the file, the raw
-    pre-punct line is dropped (we want the polished version on replay).
 
-    `meeting_offset_s` is computed against the earliest main_*.mp4 segment's
-    wall_start_ms (same anchor as the player's seg meeting_offset_ms), so
-    captions line up with the mp4 timeline directly.
+def _build_canonical_finals(target_dir):
+    """Read transcript.jsonl, dedup punct vs raw, return ordered list of finals.
+
+    Each item: {t, text, punct, segment}. Caller may add meeting_offset_s.
+    Used by both the transcript.json endpoint and the refine pipeline so
+    they share the exact same source-of-truth ordering.
     """
-    base = Path(RECORDINGS_DIR)
-    target = (base / meeting_dir).resolve()
-    if not str(target).startswith(str(base.resolve())):
-        abort(404)
-    if not target.exists() or not target.is_dir():
-        abort(404)
-
-    jsonl = target / "transcript.jsonl"
+    jsonl = target_dir / "transcript.jsonl"
     if not jsonl.exists():
-        return jsonify({"ok": True, "items": [], "t0_ms": None})
-
-    t0_ms = None
-    mj = target / "meeting.json"
-    if mj.exists():
-        try:
-            data = json.loads(mj.read_text(encoding="utf-8"))
-            starts = [
-                s.get("wall_start_ms")
-                for s in (data.get("segments") or [])
-                if (s.get("file") or "").startswith("main_") and s.get("wall_start_ms")
-            ]
-            if starts:
-                t0_ms = min(starts)
-        except Exception:
-            pass
-
+        return []
     finals = []
     try:
         with jsonl.open(encoding="utf-8") as f:
@@ -620,57 +608,250 @@ def meeting_transcript(meeting_dir):
                     continue
                 finals.append(d)
     except OSError:
-        return jsonify({"ok": False, "error": "read transcript failed"}), 500
-
-    # 后到的 punct 版本替换之前同一 segment 的 raw 版本（最近一条）
+        return []
+    # punct 替换前面同 segment 的 raw（最近一条）
     superseded = set()
     for i, d in enumerate(finals):
         if not d.get("punct"):
             continue
         seg = d.get("replaces_segment", d.get("segment"))
         for j in range(i - 1, -1, -1):
-            if j in superseded:
-                continue
-            if finals[j].get("punct"):
+            if j in superseded or finals[j].get("punct"):
                 continue
             if finals[j].get("segment") == seg:
                 superseded.add(j)
                 break
-
-    items = []
-    first_t = finals[0]["t"] if finals else 0.0
+    out = []
     for i, d in enumerate(finals):
         if i in superseded:
             continue
-        t = float(d.get("t", 0.0))
-        if t0_ms is not None:
-            offset_s = t - (t0_ms / 1000.0)
-        else:
-            offset_s = t - first_t
-        items.append({
-            "t": t,
-            "meeting_offset_s": round(offset_s, 3),
-            "text": d.get("text", ""),
-            "punct": bool(d.get("punct", False)),
+        out.append({
+            "t":       float(d.get("t", 0.0)),
+            "text":    d.get("text", ""),
+            "punct":   bool(d.get("punct", False)),
             "segment": d.get("segment", -1),
+        })
+    return out
+
+
+@app.route("/recordings/<meeting_dir>/transcript.json")
+@login_required
+def meeting_transcript(meeting_dir):
+    """Return final ASR transcripts aligned to the meeting timeline.
+
+    If transcript.refined.jsonl (LLM-polished) exists, prefer its `text`
+    over the raw transcript.jsonl text; timing/segment metadata still comes
+    from the raw file. Original transcript.jsonl is never modified.
+
+    `meeting_offset_s` is anchored to the earliest main_*.mp4 wall_start_ms
+    so captions line up with player.js's segment timeline (handles multi-
+    segment meetings — break-and-rejoin produces multiple main_NN.mp4, each
+    carrying its own meeting_offset_ms; this single transcript file with
+    absolute t covers them all).
+    """
+    base = Path(RECORDINGS_DIR)
+    target = (base / meeting_dir).resolve()
+    if not str(target).startswith(str(base.resolve())):
+        abort(404)
+    if not target.exists() or not target.is_dir():
+        abort(404)
+
+    raw_finals = _build_canonical_finals(target)
+    if not raw_finals:
+        return jsonify({"ok": True, "items": [], "t0_ms": None,
+                        "source": "none", "has_refined": False})
+
+    # 优化版：跟 raw_finals 一一对应（同序、同 t），只 text 可能改了
+    refined_path = target / "transcript.refined.jsonl"
+    has_refined = refined_path.exists()
+    refined_text_by_t = {}
+    if has_refined:
+        try:
+            with refined_path.open(encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        d = json.loads(line)
+                    except Exception:
+                        continue
+                    if "t" in d and "text" in d:
+                        refined_text_by_t[round(float(d["t"]), 3)] = d["text"]
+        except OSError:
+            has_refined = False
+
+    use_refined = bool(request.args.get("refined", "1") == "1" and has_refined)
+
+    t0_ms = _read_meeting_t0_ms(target)
+    first_t = raw_finals[0]["t"]
+    items = []
+    for d in raw_finals:
+        t = d["t"]
+        offset_s = (t - t0_ms / 1000.0) if t0_ms is not None else (t - first_t)
+        text = d["text"]
+        is_refined = False
+        if use_refined:
+            r = refined_text_by_t.get(round(t, 3))
+            if r:
+                text = r
+                is_refined = True
+        items.append({
+            "t":                t,
+            "meeting_offset_s": round(offset_s, 3),
+            "text":             text,
+            "punct":            d["punct"],
+            "segment":          d["segment"],
+            "refined":          is_refined,
         })
     items.sort(key=lambda x: x["meeting_offset_s"])
 
-    return jsonify({"ok": True, "items": items, "t0_ms": t0_ms})
+    return jsonify({
+        "ok": True,
+        "items": items,
+        "t0_ms": t0_ms,
+        "source": "refined" if use_refined else "raw",
+        "has_refined": has_refined,
+    })
+
+
+@app.route("/recordings/<meeting_dir>/transcript/refine", methods=["POST"])
+@login_required
+def refine_meeting_transcript(meeting_dir):
+    """Run the configured LLM as a *conservative* speech-to-text fixer.
+
+    Reads transcript.jsonl finals (post-punct dedup), asks the LLM to fix
+    only obvious homophone errors and add light punctuation. Strict rules:
+      - 输出句数 = 输入句数（一一对应，不合并/不拆分）
+      - 不改数字、人名、专有名词（除非明显同音错）
+      - 不增删内容、不修正发言人本身的口误事实
+    Result written to transcript.refined.jsonl alongside the raw file
+    (raw is never modified). Caller's GET will then prefer refined.text.
+    """
+    base = Path(RECORDINGS_DIR)
+    target = (base / meeting_dir).resolve()
+    if not str(target).startswith(str(base.resolve())):
+        abort(404)
+    if not target.exists() or not target.is_dir():
+        abort(404)
+
+    try:
+        cfg = json.loads(Path(CONFIG_PATH).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        return jsonify({"ok": False, "error": f"读 config 失败：{e}"}), 500
+    llm = cfg.get("llm") or {}
+    base_url = (llm.get("base_url") or "").strip()
+    api_key  = (llm.get("api_key")  or "").strip()
+    model    = (llm.get("model")    or "").strip()
+    if not (base_url and api_key and model):
+        return jsonify({"ok": False,
+                        "error": "请先在【配置】页填写 LLM Base URL / API Key / 模型名"}), 400
+
+    finals = _build_canonical_finals(target)
+    if not finals:
+        return jsonify({"ok": False,
+                        "error": "transcript.jsonl 不存在或没有 final 句"}), 400
+
+    # 拼输入：每行一句，加序号让 LLM 容易对齐
+    numbered_input = "\n".join(f"[{i}] {f['text']}" for i, f in enumerate(finals))
+
+    system_prompt = (
+        "你是字幕保守纠错助手。会收到一段语音识别（ASR）的转录，每行一句，前面是序号 [N]。\n"
+        "你的任务是仅做轻量纠错，绝对不做"内容创作"。\n\n"
+        "【可以做的修改】\n"
+        "- 修复明显的同音字错（如"基调一处"→"基础教育一处"、"社交委"→"市教委"）\n"
+        "- 修复明显的形近字错\n"
+        "- 补全或修正中文标点（句号、逗号、问号），让句子更易读\n\n"
+        "【绝对不可以做的修改】\n"
+        "- 不修改数字、金额、日期、时间\n"
+        "- 不修改人名、机构名、专有名词（除非是明显的同音错字，如"市交委"→"市教委"）\n"
+        "- 不修改语义，不改写句式\n"
+        "- 不增加任何内容（哪怕是过渡词、连接词）\n"
+        "- 不删除任何实词\n"
+        "- 不合并多句、不拆分单句（保持每句一一对应）\n"
+        "- 不修正发言人原本说错的事实（哪怕你认为他说错了）\n"
+        "- 不输出会议总结或分析\n\n"
+        "输出严格使用 JSON 对象格式：\n"
+        '{"refined": ["第0句修订后", "第1句修订后", ..., "第N-1句修订后"]}\n'
+        "数组长度必须等于输入的句数。每个元素是对应输入句的修订版本。\n"
+        "如果某句无需修改，原样返回。"
+    )
+    user_prompt = (
+        f"以下 {len(finals)} 句 ASR 转录，请逐句保守纠错（同音字 + 标点）：\n\n"
+        f"{numbered_input}"
+    )
+
+    text, err = _llm_chat_complete(
+        base_url, api_key, model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt},
+        ],
+        timeout=180,
+        response_format={"type": "json_object"},
+    )
+    if err:
+        return jsonify({"ok": False, "error": f"LLM 调用失败：{err}"}), 502
+
+    try:
+        data = json.loads(text)
+        refined = data.get("refined")
+        if not isinstance(refined, list) or len(refined) != len(finals):
+            return jsonify({
+                "ok": False,
+                "error": f"LLM 输出数组长度 {len(refined) if isinstance(refined, list) else '?'} != 输入 {len(finals)}，已放弃。原始字幕未改动。",
+            }), 502
+    except (json.JSONDecodeError, AttributeError) as e:
+        return jsonify({"ok": False,
+                        "error": f"LLM 输出不是合法 JSON：{e}"}), 502
+
+    # 写 transcript.refined.jsonl（保留原始 jsonl 不动）
+    out = target / "transcript.refined.jsonl"
+    try:
+        tmp = str(out) + ".tmp"
+        with Path(tmp).open("w", encoding="utf-8") as f:
+            for d, new_text in zip(finals, refined):
+                row = {
+                    "t":       d["t"],
+                    "text":    str(new_text or "").strip(),
+                    "segment": d["segment"],
+                    "refined": True,
+                    "model":   model,
+                }
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        os.replace(tmp, str(out))
+    except OSError as e:
+        return jsonify({"ok": False, "error": f"写 refined 文件失败：{e}"}), 500
+
+    # 统计有多少句被改了（提示用户）
+    changed = sum(
+        1 for d, new_text in zip(finals, refined)
+        if str(new_text or "").strip() != d["text"].strip()
+    )
+    return jsonify({
+        "ok": True,
+        "lines_total":   len(finals),
+        "lines_changed": changed,
+        "model":         model,
+    })
 
 
 # --- LLM-driven meeting summary --------------------------------------------
 # 通用 OpenAI 兼容协议 /v1/chat/completions，支持 DeepSeek / 通义 / 火山等。
 # 不引入 requests 依赖，纯 stdlib urllib。
 
-def _llm_chat_complete(base_url, api_key, model, messages, timeout=180):
-    """Call OpenAI-compatible chat completions. Returns (text, error_str)."""
+def _llm_chat_complete(base_url, api_key, model, messages, timeout=180, response_format=None):
+    """Call OpenAI-compatible chat completions. Returns (text, error_str).
+
+    response_format e.g. {"type": "json_object"} — DeepSeek/通义/openai
+    都支持，强制模型输出合法 JSON。
+    """
     url = base_url.rstrip("/") + "/v1/chat/completions"
-    body = json.dumps({
+    payload = {
         "model": model,
         "messages": messages,
         "stream": False,
-    }).encode("utf-8")
+    }
+    if response_format:
+        payload["response_format"] = response_format
+    body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url,
         data=body,
@@ -705,37 +886,33 @@ def _llm_chat_complete(base_url, api_key, model, messages, timeout=180):
         return None, f"响应字段缺失：{raw[:300]}"
 
 
-def _read_meeting_finals(meeting_dir_path):
-    """Return (sentences, meeting_name). punct 优先替换 raw。"""
-    jsonl = meeting_dir_path / "transcript.jsonl"
-    if not jsonl.exists():
-        return [], ""
-    finals = []
-    with jsonl.open(encoding="utf-8") as f:
-        for line in f:
+def _read_meeting_finals(meeting_dir_path, prefer_refined=True):
+    """Return (sentences, meeting_name). 复用 _build_canonical_finals。
+
+    prefer_refined: 如果 transcript.refined.jsonl 存在，把对应 t 的句子换成
+    refined 版本。raw 永不被改动；这只是给 summary endpoint 喂更准的输入。
+    """
+    finals = _build_canonical_finals(meeting_dir_path)
+    if prefer_refined:
+        refined_path = meeting_dir_path / "transcript.refined.jsonl"
+        if refined_path.exists():
+            rmap = {}
             try:
-                d = json.loads(line)
-            except Exception:
-                continue
-            if not d.get("is_final"):
-                continue
-            finals.append(d)
-    superseded = set()
-    for i, d in enumerate(finals):
-        if not d.get("punct"):
-            continue
-        seg = d.get("replaces_segment", d.get("segment"))
-        for j in range(i - 1, -1, -1):
-            if j in superseded or finals[j].get("punct"):
-                continue
-            if finals[j].get("segment") == seg:
-                superseded.add(j)
-                break
-    sentences = [
-        finals[i].get("text", "").strip()
-        for i in range(len(finals))
-        if i not in superseded and finals[i].get("text")
-    ]
+                with refined_path.open(encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            d = json.loads(line)
+                        except Exception:
+                            continue
+                        if "t" in d and "text" in d:
+                            rmap[round(float(d["t"]), 3)] = d["text"]
+            except OSError:
+                rmap = {}
+            for d in finals:
+                r = rmap.get(round(d["t"], 3))
+                if r:
+                    d["text"] = r
+    sentences = [d["text"].strip() for d in finals if d["text"].strip()]
     meeting_name = ""
     mj = meeting_dir_path / "meeting.json"
     if mj.exists():
