@@ -54,6 +54,20 @@ CHUNK_BYTES = CHUNK_SAMPLES * 4   # float32
 
 RECONNECT_DELAY = 3.0
 
+# --- Application-layer watchdog ---------------------------------------
+# WS-level ping_interval/ping_timeout only detects TCP/WS death. It does
+# NOT detect the case where sherpa's WS is alive but its inference loop
+# is stuck and never emits a text message. Real-world bug observed
+# 2026-05-13: bridge spawned ffmpeg @13:30:10 then went silent for 2h13m
+# while recorder-core's SrsStreamer happily kept publishing — sherpa
+# never returned a transcript, recv() blocked forever, the whole session
+# hung. Watchdog below cancels the session if no ws message arrives for
+# APP_LAYER_TIMEOUT seconds; the outer reconnect loop then tries again.
+APP_LAYER_TIMEOUT = float(os.environ.get("ASR_APP_LAYER_TIMEOUT", "60"))
+# How often the watchdog logs a heartbeat (so we have observability even
+# when nothing's wrong). 0 = only log on timeout.
+HEARTBEAT_INTERVAL = float(os.environ.get("ASR_HEARTBEAT_INTERVAL", "30"))
+
 # --- Punctuation (best-effort post-process for finals) ----------------
 # Each VAD-final segment is post-processed by spawning a sherpa-onnx
 # offline-punctuation subprocess (~0.5s including model load + 20ms infer).
@@ -159,8 +173,12 @@ def write_transcript_line(payload):
                 log.warning("write per-meeting jsonl failed: %s", e)
 
 
-async def feeder(ws, ff_stdout):
-    """Pump ffmpeg PCM → sherpa websocket. Blocks until ffmpeg EOF or error."""
+async def feeder(ws, ff_stdout, state):
+    """Pump ffmpeg PCM → sherpa websocket. Blocks until ffmpeg EOF or error.
+
+    state["samples_sent"] is updated cumulatively so the watchdog can show
+    "X seconds of audio pushed, Y messages received" heartbeats.
+    """
     loop = asyncio.get_event_loop()
     while True:
         # ffmpeg stdout is a blocking pipe; offload reads to a thread
@@ -173,6 +191,7 @@ async def feeder(ws, ff_stdout):
             return
         # sherpa per-message header is num_samples (int32 LE), then float32 LE samples
         await ws.send(struct.pack("<i", n) + raw[: n * 4])
+        state["samples_sent"] += n
 
 
 async def punctuate(text):
@@ -244,12 +263,16 @@ async def punct_and_write(text, seg, meeting_id):
     })
 
 
-async def receiver(ws):
+async def receiver(ws, state):
     """Consume sherpa JSON messages and persist them.
 
     sherpa pushes both partial (`is_final=false`) and final (`is_final=true`)
     transcripts. We log both — the SSE consumer in Flask will collapse partials.
     For every final we also schedule an async punctuation task.
+
+    state["last_recv_ts"] is bumped on EVERY incoming ws message (text or
+    binary, valid JSON or not). The watchdog uses it to detect application-
+    layer silence even when the WS layer is healthy.
     """
     while True:
         try:
@@ -257,6 +280,9 @@ async def receiver(ws):
         except websockets.ConnectionClosed:
             log.info("sherpa websocket closed")
             return
+        # Update before any filtering: any byte from sherpa proves it's alive.
+        state["last_recv_ts"] = time.time()
+        state["messages_recv"] += 1
         if isinstance(msg, bytes):
             continue   # sherpa never sends binary; ignore defensively
         try:
@@ -281,12 +307,47 @@ async def receiver(ws):
         }
         write_transcript_line(payload)
         if is_final:
+            state["finals_recv"] += 1
             # Schedule punct in the background; don't block the receiver loop.
             asyncio.create_task(punct_and_write(text, seg, meeting_id))
 
 
+async def watchdog(state):
+    """Periodically print heartbeat; abort session if sherpa goes silent.
+
+    Returns (i.e. participates in the `asyncio.wait FIRST_COMPLETED` of
+    session_once) when application-layer silence exceeds APP_LAYER_TIMEOUT,
+    triggering the outer reconnect loop to start a fresh session.
+    """
+    period = max(HEARTBEAT_INTERVAL, 5.0) if HEARTBEAT_INTERVAL > 0 else 10.0
+    next_hb = time.time() + HEARTBEAT_INTERVAL
+    while True:
+        await asyncio.sleep(period)
+        now = time.time()
+        idle = now - state["last_recv_ts"]
+        if idle > APP_LAYER_TIMEOUT:
+            log.warning(
+                "watchdog: %.0fs no ws message from sherpa "
+                "(samples_sent=%d, finals_recv=%d) — killing session",
+                idle, state["samples_sent"], state["finals_recv"],
+            )
+            return
+        if HEARTBEAT_INTERVAL > 0 and now >= next_hb:
+            audio_s = state["samples_sent"] / SAMPLE_RATE
+            log.info(
+                "heartbeat: audio_pushed=%.0fs msgs=%d finals=%d idle=%.0fs",
+                audio_s, state["messages_recv"],
+                state["finals_recv"], idle,
+            )
+            next_hb = now + HEARTBEAT_INTERVAL
+
+
 async def session_once():
-    """One full ffmpeg ↔ sherpa round-trip. Returns when either side ends."""
+    """One full ffmpeg ↔ sherpa round-trip. Returns when any of:
+       - ffmpeg EOF (publisher stopped / SRS stream gone)
+       - sherpa WS connection closed (server died/restarted)
+       - watchdog timeout (APP_LAYER_TIMEOUT s no ws msg from sherpa)
+    """
     log.info("connecting sherpa @ %s", ASR_WS_URL)
     async with websockets.connect(
         ASR_WS_URL,
@@ -297,11 +358,21 @@ async def session_once():
     ) as ws:
         log.info("sherpa connected; spawning ffmpeg for %s", SRS_URL)
         ff = open_ffmpeg()
+        # session-local counters shared with feeder/receiver/watchdog
+        state = {
+            "last_recv_ts":  time.time(),
+            "samples_sent":  0,
+            "messages_recv": 0,
+            "finals_recv":   0,
+        }
         try:
-            feed_task = asyncio.create_task(feeder(ws, ff.stdout))
-            recv_task = asyncio.create_task(receiver(ws))
+            feed_task = asyncio.create_task(feeder(ws, ff.stdout, state))
+            recv_task = asyncio.create_task(receiver(ws, state))
+            wdog_task = asyncio.create_task(watchdog(state))
             done, pending = await asyncio.wait(
-                {feed_task, recv_task}, return_when=asyncio.FIRST_COMPLETED)
+                {feed_task, recv_task, wdog_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
             for t in pending:
                 t.cancel()
             try:
@@ -337,6 +408,8 @@ async def main():
     log.info("  ASR_WS_URL=%s", ASR_WS_URL)
     log.info("  RUN_DIR=%s  RECORDINGS_DIR=%s", RUN_DIR, RECORDINGS_DIR)
     log.info("  PUNCT_ENABLED=%s  PUNCT_MODEL=%s", PUNCT_ENABLED, PUNCT_MODEL)
+    log.info("  APP_LAYER_TIMEOUT=%.0fs  HEARTBEAT_INTERVAL=%.0fs",
+             APP_LAYER_TIMEOUT, HEARTBEAT_INTERVAL)
 
     while True:
         try:
