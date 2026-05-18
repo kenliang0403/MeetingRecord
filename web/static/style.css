@@ -594,6 +594,28 @@ canvas    { background: #11141a; border-radius: 4px; }
 }
 .summary-output:empty { display: none; }
 
+/* 回放页：字幕开关 + 偏移调节（play-bar 内） */
+.cap-toggle, .cap-offset {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #4b5563;
+  margin-left: 14px;
+  user-select: none;
+  cursor: default;
+}
+.cap-toggle { cursor: pointer; }
+.cap-toggle input[type=checkbox] { margin: 0; cursor: pointer; }
+.cap-offset input[type=number] {
+  width: 64px;
+  padding: 2px 6px;
+  font-size: 13px;
+  border: 1px solid #d0d4dc;
+  border-radius: 3px;
+}
+.cap-offset .muted { font-size: 11px; }
+
 /* 字幕优化（refine）控件 */
 .refine-toggle {
   display: inline-flex;

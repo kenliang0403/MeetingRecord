@@ -43,6 +43,16 @@
     </label>
     <span class="muted" id="aux-hint" style="font-size:12px;"></span>
     {% endif %}
+
+    <label class="cap-toggle" title="显示/隐藏 ASR 字幕（保存到浏览器本地）">
+      <input type="checkbox" id="cap-toggle" checked>
+      <span>显示字幕</span>
+    </label>
+    <label class="cap-offset" title="字幕相对音频的时间偏移；正数让字幕提前出现（毫秒为单位的人工对齐）">
+      <span>偏移</span>
+      <input type="number" id="cap-offset" min="-5" max="5" step="0.1" value="0">
+      <span class="muted">秒（+ 提前）</span>
+    </label>
   </div>
 </div>
 

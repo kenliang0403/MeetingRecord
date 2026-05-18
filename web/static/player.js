@@ -290,6 +290,39 @@
     const MAX_CHARS  = 35;     // 单条字幕最长字数（中文 ~ 2 行 18px）
     const MIN_DUR_S  = 1.5;    // 单条字幕最短秒数（不要一闪而过）
     const TAIL_HOLD  = 0.5;    // 末尾再保留秒数避免句末提前消失
+
+    // --- 字幕开关 + 偏移（localStorage 持久化）--------------------
+    // captionOffset > 0 把"当前时刻"视为已经过去了 N 秒，等于字幕提前 N 秒
+    // 出现；负数则推后。用 number input + change/input 即时生效。
+    const LS_ENABLED = 'replayCaptionEnabled';
+    const LS_OFFSET  = 'replayCaptionOffset';
+    let captionsEnabled = true;
+    let captionOffset   = 0;
+    try {
+      const v = localStorage.getItem(LS_ENABLED);
+      if (v !== null) captionsEnabled = (v === '1');
+      const o = localStorage.getItem(LS_OFFSET);
+      if (o !== null) captionOffset = parseFloat(o) || 0;
+    } catch {}
+    const capToggleEl  = document.getElementById('cap-toggle');
+    const capOffsetEl  = document.getElementById('cap-offset');
+    if (capToggleEl) {
+      capToggleEl.checked = captionsEnabled;
+      capToggleEl.addEventListener('change', () => {
+        captionsEnabled = capToggleEl.checked;
+        try { localStorage.setItem(LS_ENABLED, captionsEnabled ? '1' : '0'); } catch {}
+        updateCaption();
+      });
+    }
+    if (capOffsetEl) {
+      capOffsetEl.value = captionOffset.toFixed(1);
+      capOffsetEl.addEventListener('input', () => {
+        const v = parseFloat(capOffsetEl.value);
+        captionOffset = Number.isFinite(v) ? v : 0;
+        try { localStorage.setItem(LS_OFFSET, captionOffset.toFixed(2)); } catch {}
+        updateCaption();
+      });
+    }
     // 句末标点：硬切；句中标点：软切（仅当当前段已经达到一定长度才切）
     const HARD_PUNCT = /[。！？]/;          // 。！？
     const SOFT_PUNCT = /[，；、：]/;     // ，；、：
@@ -405,12 +438,15 @@
     }
 
     function updateCaption() {
+      if (!captionsEnabled) return setCaption('');
       if (!subtitles.length) return;
       const mainSrc = sources.main;
       if (!mainSrc.video) return;
       const seg = MAIN[mainSrc.idx];
       if (!seg || seg.meeting_offset_ms == null) return;
-      const meetingS = (seg.meeting_offset_ms + mainSrc.video.currentTime * 1000) / 1000;
+      // captionOffset > 0 → 字幕提前：相当于把"当前时刻"虚拟前推
+      const meetingS = (seg.meeting_offset_ms + mainSrc.video.currentTime * 1000) / 1000
+                    + captionOffset;
       const idx = findCueAt(meetingS);
       if (idx < 0) return setCaption('');
       const cue = subtitles[idx];
