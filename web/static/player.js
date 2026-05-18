@@ -272,28 +272,105 @@
   applyLayout();
   refreshPlaylist();
 
-  // --- ASR 字幕回放同步（按主流 currentTime）--------------------------
-  // /recordings/<m>/transcript.json 返回的 items 已按 meeting_offset_s 排序，
-  // 每条对应一句 ASR final，含：
-  //   meeting_offset_s — 该句相对 meeting 起点的秒数（== segment 开始时刻）
-  //   text             — punct 版本（若有）否则 raw
-  //   timestamps       — 每字相对 segment start_time 的秒数（typewriter 效果）
-  //   punct            — 是否含标点
+  // --- ASR 字幕回放同步（电影字幕风格）------------------------------
+  // 跟实时直播不同：回放场景下用户可暂停/拖动/快进，逐字浮现反而碎，
+  // 看上去像流式输出。电影字幕的做法是 —— 每句完整显示，跟着音频同步进退，
+  // 下一句来时一次性切换。
   //
-  // 显示策略（解决"一次显示太多 / 话没说完就消失"两个问题）：
-  //   - 用 timestamps 算"当前应播到第几字"，逐字浮现，跟说话节奏同步
-  //   - 限制窗口最多 MAX_VISIBLE_CHARS 字符，超长就 ellipsis prefix 滚动
-  //   - segment 结束时间 = max(timestamps) + EXTRA_HOLD_S，过了才清空；
-  //     这样长句不会播一半字幕就空了
-  //   - 下一个 segment 来时立即整体切换（不会两句重叠）
+  // ASR 返回的 final 一段可能 30 秒 100 字，必须先**拆**成多条短字幕：
+  //   1. 按中文句末标点（。！？；）和句中标点（，、）作软切点
+  //   2. 每段最长 ~35 字，超过强切
+  //   3. 每段最短 1.5 秒，避免一闪而过
+  //   4. 用 timestamps 按比例映射出每段的 start..end 时间
   //
+  // 显示时：binary-search 当前应该哪段 → 整段固定显示 → 时间窗口过去切下一段
   // 暴露 window.player_reloadCaptions(useRefined) 给 refine UI 切换 raw/refined.
   const captionEl = document.getElementById('replay-caption');
   if (captionEl && window.TRANSCRIPT_URL && HAS_TIME_DATA) {
-    const MAX_VISIBLE_CHARS = 70;   // 屏幕上一次最多多少字
-    const EXTRA_HOLD_S      = 2;    // 句末再保留 N 秒避免提早清空
+    const MAX_CHARS  = 35;     // 单条字幕最长字数（中文 ~ 2 行 18px）
+    const MIN_DUR_S  = 1.5;    // 单条字幕最短秒数（不要一闪而过）
+    const TAIL_HOLD  = 0.5;    // 末尾再保留秒数避免句末提前消失
+    // 句末标点：硬切；句中标点：软切（仅当当前段已经达到一定长度才切）
+    const HARD_PUNCT = /[。！？]/;          // 。！？
+    const SOFT_PUNCT = /[，；、：]/;     // ，；、：
+    const MIN_HARD_CUT_CHARS = 4;
+    const MIN_SOFT_CUT_CHARS = 12;
 
     let captions = [];
+    let subtitles = [];    // 拆好的 cue 列表 [{ start, end, text, punct }]
+
+    function buildSubtitles() {
+      subtitles = [];
+      for (const c of captions) {
+        const ts = c.timestamps || [];
+        if (!c.text) continue;
+        if (!ts.length) {
+          subtitles.push({
+            start: c.meeting_offset_s,
+            end:   c.meeting_offset_s + 5,
+            text:  c.text,
+            punct: c.punct,
+          });
+          continue;
+        }
+        // 1. 在 punct 文本上找切点
+        const cuts = [0];
+        for (let i = 0; i < c.text.length; i++) {
+          const ch = c.text[i];
+          const since = i + 1 - cuts[cuts.length - 1];
+          if (HARD_PUNCT.test(ch) && since >= MIN_HARD_CUT_CHARS) {
+            cuts.push(i + 1);
+          } else if (SOFT_PUNCT.test(ch) && since >= MIN_SOFT_CUT_CHARS) {
+            cuts.push(i + 1);
+          }
+        }
+        if (cuts[cuts.length - 1] < c.text.length) cuts.push(c.text.length);
+
+        // 2. 二次按字数强切
+        const fine = [0];
+        for (let i = 1; i < cuts.length; i++) {
+          let cur = fine[fine.length - 1];
+          while (cuts[i] - cur > MAX_CHARS) {
+            cur += MAX_CHARS;
+            fine.push(cur);
+          }
+          fine.push(cuts[i]);
+        }
+
+        // 3. 每段算时间窗口（按 punct text 字数比例映射回 raw_idx）
+        const totalChars = c.text.length;
+        const tEnd = ts[ts.length - 1];
+        for (let i = 0; i < fine.length - 1; i++) {
+          const aChar = fine[i], bChar = fine[i + 1];
+          const text  = c.text.slice(aChar, bChar).trim();
+          if (!text) continue;
+          // 按比例换算到 raw_idx → timestamps 时间
+          const rawA = Math.floor(ts.length * aChar / totalChars);
+          const rawB = Math.min(ts.length - 1,
+                                Math.max(rawA, Math.floor(ts.length * bChar / totalChars) - 1));
+          const tA = (rawA < ts.length ? ts[rawA] : tEnd);
+          // 段尾时间：下一段开头 - 0；最后一段直到 segment 结束
+          let tB;
+          if (i === fine.length - 2) {
+            tB = tEnd;
+          } else {
+            const nextChar = fine[i + 1];
+            const nextRaw  = Math.floor(ts.length * nextChar / totalChars);
+            tB = (nextRaw < ts.length ? ts[nextRaw] : tEnd);
+          }
+          // 最短 MIN_DUR_S
+          if (tB - tA < MIN_DUR_S) tB = tA + MIN_DUR_S;
+          subtitles.push({
+            start: c.meeting_offset_s + tA,
+            end:   c.meeting_offset_s + tB + TAIL_HOLD,
+            text:  text,
+            punct: c.punct,
+          });
+        }
+      }
+      // 排序确保 binary-search 正确
+      subtitles.sort((a, b) => a.start - b.start);
+    }
 
     function loadCaptions(useRefined) {
       const url = window.TRANSCRIPT_URL + (useRefined === false ? '?refined=0' : '?refined=1');
@@ -301,6 +378,7 @@
         .then(r => r.json())
         .then(j => {
           captions = (j && j.ok && Array.isArray(j.items)) ? j.items : [];
+          buildSubtitles();
           captionEl.textContent = '';
           captionEl.classList.remove('final');
         })
@@ -309,73 +387,35 @@
     window.player_reloadCaptions = loadCaptions;
     loadCaptions(true);
 
-    // binary-search 最后一个 meeting_offset_s <= s 的 caption
-    function findCaptionAt(s) {
-      let lo = 0, hi = captions.length - 1, found = -1;
+    function findCueAt(s) {
+      let lo = 0, hi = subtitles.length - 1, found = -1;
       while (lo <= hi) {
         const mid = (lo + hi) >> 1;
-        if (captions[mid].meeting_offset_s <= s) { found = mid; lo = mid + 1; }
+        if (subtitles[mid].start <= s) { found = mid; lo = mid + 1; }
         else { hi = mid - 1; }
       }
       return found;
     }
 
-    // 把"逐字时间戳"按 raw 字数索引，但展示的 c.text 可能是 punct 版本
-    // （字数不同）。简单按比例换算 raw_idx → punct_idx。
-    function visibleSlice(text, timestamps, segLocalT) {
-      if (!timestamps || timestamps.length === 0) {
-        return text;   // 没 timestamp 信息直接全显示
-      }
-      // raw 字数中已播放到第几字
-      let rawShown = 0;
-      for (let i = 0; i < timestamps.length; i++) {
-        if (timestamps[i] <= segLocalT) rawShown = i + 1;
-        else break;
-      }
-      if (rawShown === 0) return '';
-      let cut;
-      if (rawShown >= timestamps.length) {
-        cut = text.length;
-      } else {
-        // text 可能比 timestamps 长（punct 加了标点），按比例换算
-        cut = Math.ceil(text.length * rawShown / timestamps.length);
-      }
-      let shown = text.slice(0, cut);
-      if (shown.length > MAX_VISIBLE_CHARS) {
-        shown = '…' + shown.slice(shown.length - MAX_VISIBLE_CHARS);
-      }
-      return shown;
-    }
-
     function setCaption(text, punct) {
-      if (captionEl.textContent === text && captionEl.classList.contains('final') === !!punct) {
-        return;   // 没变化就别 reflow
-      }
+      if (captionEl.textContent === text &&
+          captionEl.classList.contains('final') === !!punct) return;
       captionEl.textContent = text;
       captionEl.classList.toggle('final', !!punct);
     }
 
     function updateCaption() {
-      if (!captions.length) return;
+      if (!subtitles.length) return;
       const mainSrc = sources.main;
       if (!mainSrc.video) return;
       const seg = MAIN[mainSrc.idx];
       if (!seg || seg.meeting_offset_ms == null) return;
-
       const meetingS = (seg.meeting_offset_ms + mainSrc.video.currentTime * 1000) / 1000;
-      const idx = findCaptionAt(meetingS);
+      const idx = findCueAt(meetingS);
       if (idx < 0) return setCaption('');
-
-      const c = captions[idx];
-      const ts = c.timestamps || [];
-      const segLocalT = meetingS - c.meeting_offset_s;
-      if (segLocalT < 0) return setCaption('');
-
-      // 句末超过 timestamps 最后一个 + EXTRA_HOLD_S 才清空
-      const segEnd = ts.length ? ts[ts.length - 1] : 5;
-      if (segLocalT > segEnd + EXTRA_HOLD_S) return setCaption('');
-
-      setCaption(visibleSlice(c.text, ts, segLocalT), c.punct);
+      const cue = subtitles[idx];
+      if (meetingS > cue.end) return setCaption('');
+      setCaption(cue.text, cue.punct);
     }
 
     ['timeupdate', 'seeked', 'play', 'pause'].forEach(ev => {
