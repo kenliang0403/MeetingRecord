@@ -589,9 +589,14 @@ def _read_meeting_t0_ms(target_dir):
 def _build_canonical_finals(target_dir):
     """Read transcript.jsonl, dedup punct vs raw, return ordered list of finals.
 
-    Each item: {t, text, punct, segment}. Caller may add meeting_offset_s.
-    Used by both the transcript.json endpoint and the refine pipeline so
-    they share the exact same source-of-truth ordering.
+    For each segment we pair the original raw final (carries `timestamps`
+    + per-char timing) with the optional later punct refinement (carries
+    cleaner `text`). Output line per segment uses raw's timestamps with
+    punct's text when available — gives the frontend both per-char timing
+    AND punctuated text in one item, which player.js needs for incremental
+    timestamp-driven caption display.
+
+    Each item: {t, text, punct, segment, timestamps, start_time, t0_raw}
     """
     jsonl = target_dir / "transcript.jsonl"
     if not jsonl.exists():
@@ -609,28 +614,34 @@ def _build_canonical_finals(target_dir):
                 finals.append(d)
     except OSError:
         return []
-    # punct 替换前面同 segment 的 raw（最近一条）
-    superseded = set()
-    for i, d in enumerate(finals):
-        if not d.get("punct"):
-            continue
-        seg = d.get("replaces_segment", d.get("segment"))
-        for j in range(i - 1, -1, -1):
-            if j in superseded or finals[j].get("punct"):
-                continue
-            if finals[j].get("segment") == seg:
-                superseded.add(j)
-                break
+    raw_by_seg = {}      # seg -> first raw final dict
+    punct_by_seg = {}    # seg -> last punct dict
+    for d in finals:
+        if d.get("punct"):
+            key = d.get("replaces_segment", d.get("segment"))
+            punct_by_seg[key] = d
+        else:
+            seg = d.get("segment", -1)
+            if seg not in raw_by_seg:
+                raw_by_seg[seg] = d
     out = []
-    for i, d in enumerate(finals):
-        if i in superseded:
-            continue
+    for seg, raw in raw_by_seg.items():
+        text = raw.get("text", "")
+        is_punct = False
+        if seg in punct_by_seg:
+            ptext = punct_by_seg[seg].get("text", "")
+            if ptext:
+                text = ptext
+                is_punct = True
         out.append({
-            "t":       float(d.get("t", 0.0)),
-            "text":    d.get("text", ""),
-            "punct":   bool(d.get("punct", False)),
-            "segment": d.get("segment", -1),
+            "t":          float(raw.get("t", 0.0)),
+            "text":       text,
+            "punct":      is_punct,
+            "segment":    seg,
+            "timestamps": raw.get("timestamps") or [],
+            "start_time": raw.get("start_time"),
         })
+    out.sort(key=lambda d: d["t"])
     return out
 
 
@@ -700,6 +711,11 @@ def meeting_transcript(meeting_dir):
             "punct":            d["punct"],
             "segment":          d["segment"],
             "refined":          is_refined,
+            # per-char timing relative to segment start_time. Empty list if
+            # bridge dropped them (rare). player.js uses this for
+            # incremental "typing" caption display.
+            "timestamps":       d.get("timestamps") or [],
+            "start_time":       d.get("start_time"),
         })
     items.sort(key=lambda x: x["meeting_offset_s"])
 
