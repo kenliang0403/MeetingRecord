@@ -11,7 +11,12 @@ Environment="SRS_PORT=8080"
 Environment="STREAM_MAIN=recorder-main"
 Environment="STREAM_AUX=recorder-aux"
 Environment="SESSION_TIMEOUT_MIN=30"
-ExecStart=/usr/bin/python3 -m gunicorn --workers 2 --threads 4 --bind 0.0.0.0:8088 --access-logfile - --error-logfile - app:app
+# --timeout 300: LLM endpoints (transcript/refine, summary) call out to
+#   external LLM APIs that routinely take 60-180s on long meetings.
+#   Default gunicorn worker timeout is 30s — it kills the worker mid-call
+#   and the browser sees "Failed to fetch".
+# --graceful-timeout 30: on systemctl reload, still let workers drain in 30s.
+ExecStart=/usr/bin/python3 -m gunicorn --workers 2 --threads 4 --timeout 300 --graceful-timeout 30 --bind 0.0.0.0:8088 --access-logfile - --error-logfile - app:app
 Restart=on-failure
 RestartSec=3
 

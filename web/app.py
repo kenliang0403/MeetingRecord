@@ -765,9 +765,6 @@ def refine_meeting_transcript(meeting_dir):
         return jsonify({"ok": False,
                         "error": "transcript.jsonl 不存在或没有 final 句"}), 400
 
-    # 拼输入：每行一句，加序号让 LLM 容易对齐
-    numbered_input = "\n".join(f"[{i}] {f['text']}" for i, f in enumerate(finals))
-
     system_prompt = (
         "你是字幕保守纠错助手。会收到一段语音识别（ASR）的转录，每行一句，前面是序号 [N]。\n"
         "你的任务是仅做轻量纠错，绝对不做内容创作。\n\n"
@@ -789,34 +786,55 @@ def refine_meeting_transcript(meeting_dir):
         "数组长度必须等于输入的句数。每个元素是对应输入句的修订版本。\n"
         "如果某句无需修改，原样返回。"
     )
-    user_prompt = (
-        f"以下 {len(finals)} 句 ASR 转录，请逐句保守纠错（同音字 + 标点）：\n\n"
-        f"{numbered_input}"
-    )
 
-    text, err = _llm_chat_complete(
-        base_url, api_key, model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": user_prompt},
-        ],
-        timeout=180,
-        response_format={"type": "json_object"},
-    )
-    if err:
-        return jsonify({"ok": False, "error": f"LLM 调用失败：{err}"}), 502
+    # 分批处理：单批一次性发 240 句会让 LLM 输出 token 数超过 max_tokens
+    # 默认 (4096) → 数组被截断 → 长度对不上 → 我们整个 abort。
+    # 拆成 batch_size=50 一批后，每批输出 ~2-3k token，安全得多。
+    # 任意一批失败就 abort（保证原子性：要么全 refined 要么不动）。
+    batch_size = int(os.environ.get("ASR_REFINE_BATCH_SIZE", "50"))
+    total_batches = (len(finals) + batch_size - 1) // batch_size
+    all_refined = []
 
-    try:
-        data = json.loads(text)
-        refined = data.get("refined")
-        if not isinstance(refined, list) or len(refined) != len(finals):
+    for batch_idx in range(total_batches):
+        batch = finals[batch_idx * batch_size : (batch_idx + 1) * batch_size]
+        numbered = "\n".join(f"[{i}] {f['text']}" for i, f in enumerate(batch))
+        user_prompt = (
+            f"以下 {len(batch)} 句 ASR 转录"
+            f"（第 {batch_idx + 1} / {total_batches} 批，共 {len(finals)} 句），"
+            f"请逐句保守纠错（同音字 + 标点）：\n\n{numbered}"
+        )
+        text, err = _llm_chat_complete(
+            base_url, api_key, model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_prompt},
+            ],
+            timeout=180,
+            response_format={"type": "json_object"},
+        )
+        if err:
             return jsonify({
                 "ok": False,
-                "error": f"LLM 输出数组长度 {len(refined) if isinstance(refined, list) else '?'} != 输入 {len(finals)}，已放弃。原始字幕未改动。",
+                "error": f"LLM 调用失败（第 {batch_idx+1}/{total_batches} 批）：{err}",
             }), 502
-    except (json.JSONDecodeError, AttributeError) as e:
-        return jsonify({"ok": False,
-                        "error": f"LLM 输出不是合法 JSON：{e}"}), 502
+        try:
+            data = json.loads(text)
+            refined = data.get("refined")
+            if not isinstance(refined, list) or len(refined) != len(batch):
+                got = len(refined) if isinstance(refined, list) else "?"
+                return jsonify({
+                    "ok": False,
+                    "error": f"LLM 第 {batch_idx+1}/{total_batches} 批输出长度 "
+                             f"{got} != 输入 {len(batch)}，已放弃。原始字幕未改动。",
+                }), 502
+        except (json.JSONDecodeError, AttributeError) as e:
+            return jsonify({
+                "ok": False,
+                "error": f"LLM 第 {batch_idx+1}/{total_batches} 批输出不是合法 JSON：{e}",
+            }), 502
+        all_refined.extend(refined)
+
+    refined = all_refined
 
     # 写 transcript.refined.jsonl（保留原始 jsonl 不动）
     out = target / "transcript.refined.jsonl"
