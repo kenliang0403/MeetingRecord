@@ -94,15 +94,37 @@ logging.basicConfig(
 log = logging.getLogger("asr-bridge")
 
 
+_mid_cache_value = None
+_mid_cache_ts    = 0.0
+_MID_CACHE_TTL_S = 10.0     # 一次会议内 meeting_id 不变，10s 缓存即可
+
 def query_meeting_id():
     """Best-effort one-shot query to recorder-core ControlServer.
 
     Returns the current meeting_id string or None when no call is active.
-    Failure modes (port closed, JSON malformed) all collapse to None.
+    Failure modes (port closed, JSON malformed, timeout) collapse to the
+    previously-cached value (better than None on transient ControlServer
+    backpressure).
+
+    IMPORTANT — this is a SYNCHRONOUS socket call invoked from inside an
+    asyncio coroutine (receiver loop). Calling it 3+/sec on every ws
+    message blocks the event loop and the call itself often times out
+    when ControlServer is busy processing H.245. Solution: 10-second
+    result cache. While the cache is fresh we skip the socket entirely
+    and event-loop stays responsive.
     """
+    global _mid_cache_value, _mid_cache_ts
+    now = time.time()
+    if (now - _mid_cache_ts) < _MID_CACHE_TTL_S:
+        return _mid_cache_value
+    _mid_cache_ts = now   # bump even on failure so we don't hammer
     try:
         with socket.create_connection((CTRL_HOST, CTRL_PORT), timeout=1.5) as s:
-            s.sendall(b"status\n")
+            # ControlServer expects a JSON command, not plain text.
+            # Sending b"status\n" makes it return {"ok": false} and we
+            # never learn the meeting_id — silently failing the
+            # per-meeting transcript path. (This was the original bug.)
+            s.sendall(b'{"cmd":"status"}\n')
             buf = b""
             while b"\n" not in buf and len(buf) < 65536:
                 more = s.recv(4096)
@@ -112,10 +134,16 @@ def query_meeting_id():
         line = buf.decode("utf-8", "replace").splitlines()[0]
         d = json.loads(line)
         if d.get("ok") and d.get("data", {}).get("in_call"):
-            return d["data"].get("meeting_id") or None
-    except Exception:
-        return None
-    return None
+            _mid_cache_value = d["data"].get("meeting_id") or None
+        else:
+            _mid_cache_value = None
+    except Exception as e:
+        # keep previous cached value on transient errors rather than
+        # dropping to None (and losing per-meeting routing for finals
+        # while ControlServer is just briefly busy)
+        log.debug("query_meeting_id transient error (keeping cached %r): %r",
+                  _mid_cache_value, e)
+    return _mid_cache_value
 
 
 def open_ffmpeg():
