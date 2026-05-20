@@ -237,12 +237,16 @@ async def process_meeting(meeting_id, mp4_path, t0_unix):
     return finals
 
 
-def write_transcript_jsonl(out_path, finals, meeting_id):
+def write_transcript_jsonl(out_path, finals, meeting_id, append=False):
     """Write each final + its punct version (if any) as two JSONL lines.
 
     Matches the format that recorder-asr-bridge writes for the live path:
     raw first, then punct=true (with replaces_segment=<seg>) for the
     transcript.json dedup logic to pick the punct version.
+
+    If `append` is True, opens the file in append mode — useful for
+    rescuing a meeting that was recorded in multiple mp4 segments
+    (main_01..main_NN), invoke once per segment.
     """
     log(f"running punctuation on {len(finals)} finals...")
     punct_results = []
@@ -252,8 +256,9 @@ def write_transcript_jsonl(out_path, finals, meeting_id):
         if (i + 1) % 20 == 0:
             log(f"  punct progress: {i + 1}/{len(finals)}")
 
-    log(f"writing {out_path}")
-    with out_path.open("w", encoding="utf-8") as f:
+    mode = "a" if append else "w"
+    log(f"{'appending to' if append else 'writing'} {out_path}")
+    with out_path.open(mode, encoding="utf-8") as f:
         for i, d in enumerate(finals):
             f.write(json.dumps({
                 "t":          d["t"],
@@ -287,6 +292,8 @@ def main():
                     help="mp4 filename within meeting dir (default: main_01.mp4 or first main_*.mp4)")
     ap.add_argument("--overwrite",      action="store_true",
                     help="overwrite existing transcript.jsonl")
+    ap.add_argument("--append",         action="store_true",
+                    help="append to existing transcript.jsonl (use for multi-mp4 meeting rescue)")
     args = ap.parse_args()
 
     meeting_dir = RECORDINGS_DIR / args.meeting_id
@@ -309,9 +316,12 @@ def main():
         return 1
 
     out_path = meeting_dir / "transcript.jsonl"
-    if out_path.exists() and not args.overwrite:
-        print(f"ERROR: {out_path} already exists. use --overwrite to replace.",
+    if out_path.exists() and not args.overwrite and not args.append:
+        print(f"ERROR: {out_path} already exists. use --overwrite or --append.",
               file=sys.stderr)
+        return 1
+    if args.overwrite and args.append:
+        print("ERROR: --overwrite and --append are mutually exclusive", file=sys.stderr)
         return 1
 
     # 读 meeting.json 拿对应 mp4 的 wall_start_ms 作 absolute t 基准
@@ -340,7 +350,7 @@ def main():
         log("no transcripts received — NOT writing empty file")
         return 1
 
-    write_transcript_jsonl(out_path, finals, args.meeting_id)
+    write_transcript_jsonl(out_path, finals, args.meeting_id, append=args.append)
     log("SUCCESS")
     return 0
 
