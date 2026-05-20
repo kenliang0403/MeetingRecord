@@ -197,33 +197,136 @@
   setInterval(pollStatus, 2000);
 
   // ---- ASR 实时字幕（SSE）-------------------------------------------------
-  // 后端 /api/transcript/stream 推送 sherpa-onnx 的 partial / final JSON。
-  // partial: 不断变化的当前句子，覆盖显示
-  // final:   一句结束（VAD endpoint），固定在屏幕上一会儿再清空
+  // 直播字幕策略 = E 方案：实时纠正 + 限尾 + 不主动消失。
+  //
+  //   partial：每 ~100ms 整段刷新（跟着说话节奏），但**限尾 MAX_CHARS 字**，
+  //            超出加 "…" 前缀，长 segment 也不会铺满屏。
+  //   final  ：punct 版优先；显示后**不主动消失**，等下一个 partial/final 覆盖。
+  //            纯沉默兜底：30s 后才清空（避免一句话挂半小时）。
+  //   punct  ：同 segment 后到的 punct final 替换 raw final 的待显示 timer。
+  //
+  // 为什么这是直播监控最优解：
+  //   - 不闪：partial 限尾后旧字滚走，新字进来，没"一大段同时变化"
+  //   - 不空白：final 不主动消失，句间隔的 5-15s 都能看到刚说的话
+  //   - 跟说同步：保留 partial 实时刷新
+  //   - 4s delay：匹配 HLS 视频缓冲（用户已实测）
+  //
+  // 控件：
+  //   显示字幕 toggle    —— 关闭即刻清空，不再接收
+  //   字幕延迟 + 应用按钮 —— 改完点【应用】才生效（避免边输入边跳）
   const captionEl = document.getElementById('live-caption');
   if (captionEl && typeof EventSource !== 'undefined') {
-    let finalFadeTimer = null;
-    let lastSegment = -1;
+    const LS_ENABLED = 'liveCaptionEnabled';
+    const LS_DELAY   = 'liveCaptionDelay';
+    let captionsEnabled = true;
+    let captionDelaySec = 4.0;
+    try {
+      const e = localStorage.getItem(LS_ENABLED);
+      if (e !== null) captionsEnabled = (e === '1');
+      const v = localStorage.getItem(LS_DELAY);
+      if (v !== null) {
+        const n = parseFloat(v);
+        if (Number.isFinite(n) && n >= 0) captionDelaySec = n;
+      }
+    } catch {}
+
+    // 显示参数（不暴露给 UI，需要调整改这里）
+    const MAX_CHARS       = 50;     // 单次显示最多字数（超出 "…" 前缀截尾）
+    const SILENCE_HOLD_MS = 15000;  // 末次更新后多久没新内容自动清空（15s）
+
+    let silenceTimer          = null;
+    let pendingPartialTimer   = null;
+    let lastFinalSeg          = -1;
+    let lastFinalDisplayTimer = null;
+
+    function clearCaption() {
+      if (silenceTimer)          { clearTimeout(silenceTimer);          silenceTimer = null; }
+      if (pendingPartialTimer)   { clearTimeout(pendingPartialTimer);   pendingPartialTimer = null; }
+      if (lastFinalDisplayTimer) { clearTimeout(lastFinalDisplayTimer); lastFinalDisplayTimer = null; }
+      captionEl.textContent = '';
+      captionEl.classList.remove('final');
+    }
+
+    function trimTail(text) {
+      if (!text) return '';
+      return (text.length > MAX_CHARS) ? '…' + text.slice(-MAX_CHARS) : text;
+    }
+
+    function applyCaption(d) {
+      if (!captionsEnabled) return;
+      // 每次更新都重置沉默兜底定时器：连续有新内容就一直挂着；
+      // 15s 内没任何新内容（真静默 / 无人说话）才清空。
+      if (silenceTimer) clearTimeout(silenceTimer);
+      captionEl.textContent = trimTail(d.text);
+      captionEl.classList.toggle('final', !!d.is_final);
+      silenceTimer = setTimeout(() => {
+        captionEl.textContent = '';
+        captionEl.classList.remove('final');
+      }, SILENCE_HOLD_MS);
+    }
+
+    // ---- UI controls ----
+    const toggleEl   = document.getElementById('live-cap-toggle');
+    const delayInput = document.getElementById('live-cap-delay');
+    const delayApply = document.getElementById('live-cap-delay-apply');
+    if (toggleEl) {
+      toggleEl.checked = captionsEnabled;
+      toggleEl.addEventListener('change', () => {
+        captionsEnabled = toggleEl.checked;
+        try { localStorage.setItem(LS_ENABLED, captionsEnabled ? '1' : '0'); } catch {}
+        if (!captionsEnabled) clearCaption();
+      });
+    }
+    if (delayInput) {
+      delayInput.value = captionDelaySec.toFixed(1);
+    }
+    function applyDelay() {
+      if (!delayInput) return;
+      const n = parseFloat(delayInput.value);
+      captionDelaySec = (Number.isFinite(n) && n >= 0) ? n : 0;
+      delayInput.value = captionDelaySec.toFixed(1);
+      try { localStorage.setItem(LS_DELAY, captionDelaySec.toFixed(2)); } catch {}
+    }
+    if (delayApply) delayApply.addEventListener('click', applyDelay);
+    if (delayInput) delayInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); applyDelay(); }
+    });
+
+    // ---- SSE ----
     const es = new EventSource('/api/transcript/stream');
     es.onmessage = (ev) => {
+      if (!captionsEnabled) return;
       let d;
       try { d = JSON.parse(ev.data); } catch { return; }
       const text = d.text || '';
       if (!text) return;
-      if (finalFadeTimer) { clearTimeout(finalFadeTimer); finalFadeTimer = null; }
-      captionEl.textContent = text;
-      captionEl.classList.toggle('final', !!d.is_final);
+      const delayMs = Math.max(0, captionDelaySec * 1000);
+
       if (d.is_final) {
-        // 一句确定后保留 4s 让人看清，期间被新 partial 覆盖也无所谓
-        finalFadeTimer = setTimeout(() => {
-          captionEl.textContent = '';
-          captionEl.classList.remove('final');
-        }, 4000);
+        // 同 segment 的 punct final 后到 → 覆盖 raw final 的 pending 显示
+        const seg = d.segment;
+        if (d.punct && seg === lastFinalSeg && lastFinalDisplayTimer) {
+          clearTimeout(lastFinalDisplayTimer);
+        }
+        lastFinalSeg = seg;
+        if (delayMs === 0) {
+          applyCaption(d);
+        } else {
+          lastFinalDisplayTimer = setTimeout(() => applyCaption(d), delayMs);
+        }
+        return;
       }
-      lastSegment = d.segment;
+
+      // partial：每条都进队列；新 partial 来时取消旧 pending（只保留最新一个待显示）
+      // 显示出来后字幕就是当时最新的全文。
+      if (pendingPartialTimer) clearTimeout(pendingPartialTimer);
+      if (delayMs === 0) {
+        applyCaption(d);
+      } else {
+        pendingPartialTimer = setTimeout(() => applyCaption(d), delayMs);
+      }
     };
     es.onerror = () => {
-      // EventSource 自动重连；只在前端做软提示
       captionEl.classList.add('disconnected');
       setTimeout(() => captionEl.classList.remove('disconnected'), 1000);
     };

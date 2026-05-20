@@ -27,6 +27,16 @@
     </div>
     <button type="button" id="live-swap-btn" class="btn btn-link" disabled
             title="把当前小窗 / 右侧画面提到大画面 / 左侧">⇄ 主画面切换</button>
+    <label class="cap-toggle" title="显示/隐藏字幕（保存到浏览器本地）">
+      <input type="checkbox" id="live-cap-toggle" checked>
+      <span>显示字幕</span>
+    </label>
+    <label class="cap-delay" title="字幕推后秒数；改完点【应用】才生效">
+      <span>字幕延迟</span>
+      <input type="number" id="live-cap-delay" min="0" max="20" step="0.5" value="4">
+      <button type="button" id="live-cap-delay-apply" class="btn btn-link" style="padding:2px 8px;">应用</button>
+      <span class="muted">秒</span>
+    </label>
     <span class="play-bar-name" id="live-msg"></span>
   </div>
 </div>

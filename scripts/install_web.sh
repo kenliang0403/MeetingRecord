@@ -23,11 +23,34 @@ WEB_DST="/opt/recorder/web"
 SCRIPT_SRC="/opt/recorder/recorder-core/scripts"
 
 echo "[1/8] sync web files to ${WEB_DST}"
+# Capture Python source hash before sync so we can decide later whether the
+# Flask app actually needs a restart. Static / templates / unit files alone
+# (typical "frontend tweak" deploy) shouldn't kick gunicorn — refreshing
+# them is enough.
+_py_hash() {
+    if [ -d "${WEB_DST}" ]; then
+        find "${WEB_DST}" -maxdepth 1 -name '*.py' -print0 2>/dev/null \
+            | sort -z | xargs -0 -r md5sum 2>/dev/null | md5sum | awk '{print $1}'
+    else
+        echo "none"
+    fi
+}
+PY_HASH_BEFORE=$(_py_hash)
+
 SUDO mkdir -p "${WEB_DST}/templates" "${WEB_DST}/static"
 SUDO rsync -a --delete \
   --exclude 'auth.json' --exclude '.flask_secret' \
   "${WEB_SRC}/" "${WEB_DST}/"
 SUDO chown -R ftadmin:ftadmin "${WEB_DST}"
+
+PY_HASH_AFTER=$(_py_hash)
+NEED_WEB_RESTART=0
+if [ "$PY_HASH_BEFORE" != "$PY_HASH_AFTER" ]; then
+    echo "    web/*.py changed → will restart recorder-web"
+    NEED_WEB_RESTART=1
+else
+    echo "    web/*.py unchanged → keep recorder-web running (no SSE drop)"
+fi
 
 echo "[2/8] python deps"
 if ! python3 -c 'import flask, gunicorn' 2>/dev/null; then
@@ -41,10 +64,23 @@ SUDO install -m 0755 -o root -g root \
   "${SCRIPT_SRC}/start-foreground.sh" /opt/recorder/scripts/start-foreground.sh
 
 echo "[4/8] install / refresh recorder-core.service"
-SUDO cp "${WEB_DST}/recorder-core.service" /etc/systemd/system/recorder-core.service
+NEED_CORE_RESTART=0
+CORE_UNIT_DST=/etc/systemd/system/recorder-core.service
+if [ ! -f "$CORE_UNIT_DST" ] || ! cmp -s "${WEB_DST}/recorder-core.service" "$CORE_UNIT_DST"; then
+    SUDO cp "${WEB_DST}/recorder-core.service" "$CORE_UNIT_DST"
+    NEED_CORE_RESTART=1
+    echo "    unit changed → will restart recorder-core (active call WILL drop)"
+else
+    echo "    unit unchanged → keep recorder-core running (active call safe)"
+fi
 
 echo "[5/8] install / refresh recorder-web.service"
-SUDO cp "${WEB_DST}/recorder-web.service"  /etc/systemd/system/recorder-web.service
+WEB_UNIT_DST=/etc/systemd/system/recorder-web.service
+if [ ! -f "$WEB_UNIT_DST" ] || ! cmp -s "${WEB_DST}/recorder-web.service" "$WEB_UNIT_DST"; then
+    SUDO cp "${WEB_DST}/recorder-web.service" "$WEB_UNIT_DST"
+    NEED_WEB_RESTART=1
+    echo "    unit changed → will restart recorder-web"
+fi
 
 echo "[6/8] install recorder-restart path/service units (sudoless restart trigger)"
 # web 写 /opt/recorder/run/restart-recorder.flag → systemd path unit (root)
@@ -74,12 +110,22 @@ if pgrep -af 'recorder-core -c /opt/recorder/config/config.json' \
   fi
 fi
 
-echo "[8/8] enable + start units"
-SUDO systemctl enable recorder-core
-SUDO systemctl restart recorder-core
-SUDO systemctl enable recorder-web
-SUDO systemctl restart recorder-web
-SUDO systemctl enable --now recorder-restart.path
+echo "[8/8] enable + conditional restart"
+SUDO systemctl enable recorder-core 2>/dev/null
+if [ "$NEED_CORE_RESTART" = "1" ]; then
+    SUDO systemctl restart recorder-core
+    echo "    recorder-core restarted"
+else
+    echo "    recorder-core left running — active H.323 call (if any) untouched"
+fi
+SUDO systemctl enable recorder-web 2>/dev/null
+if [ "$NEED_WEB_RESTART" = "1" ]; then
+    SUDO systemctl restart recorder-web
+    echo "    recorder-web restarted"
+else
+    echo "    recorder-web left running — SSE / live caption stream untouched"
+fi
+SUDO systemctl enable --now recorder-restart.path 2>/dev/null
 
 # auth.json bootstrap — only when missing
 if [ ! -f "${WEB_DST}/auth.json" ]; then
