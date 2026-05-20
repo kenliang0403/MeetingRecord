@@ -5,8 +5,8 @@
 # wrapper for 104 doesn't pre-build).
 #
 # Does NOT run `cmake --install` because that would overwrite
-# /opt/recorder/config/config.json with the repo default (alias=<alias-1>),
-# while 104 needs its own alias (e.g. <alias-2>).
+# /opt/recorder/config/config.json — the secondary host typically registers
+# with the GK under a different alias than the primary.
 #
 # Does NOT kill or nohup-start processes — systemd manages the lifecycle.
 set -e
@@ -17,6 +17,8 @@ if [ -z "$PW" ]; then
     exit 1
 fi
 SUDO() { echo "$PW" | sudo -S -p '' "$@"; }
+
+RUN_USER="${RUN_USER:-ftadmin}"
 
 BUILD_DIR=/opt/recorder/recorder-core/build
 BUILD_BIN="$BUILD_DIR/recorder-core"
@@ -37,11 +39,11 @@ SUDO install -m 0755 "$BUILD_BIN" "$LIVE_BIN"
 ls -l "$LIVE_BIN"
 
 # 3) trigger systemd restart via path-unit. /opt/recorder/run/ should be
-#    chowned to ftadmin by install_web.sh; create+chown defensively here
-#    in case install_web.sh hasn't run on this box yet.
+#    chowned to the deploy user by install_web.sh; create+chown defensively
+#    here in case install_web.sh hasn't run on this box yet.
 if [ ! -d "$(dirname "$TRIGGER")" ]; then
     SUDO mkdir -p "$(dirname "$TRIGGER")"
-    SUDO chown ftadmin:ftadmin "$(dirname "$TRIGGER")"
+    SUDO chown "${RUN_USER}:${RUN_USER}" "$(dirname "$TRIGGER")"
 fi
 date '+%Y-%m-%d %H:%M:%S' > "$TRIGGER"
 

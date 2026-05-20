@@ -156,14 +156,14 @@ def send(cmd_dict):
     return json.loads(buf.decode())
 
 print(send({"cmd": "status"}))
-print(send({"cmd": "dial", "number": "<dial-number>"}))
+print(send({"cmd": "dial", "number": "<mcu-number>"}))
 ```
 
 CLI 包装：
 
 ```bash
 python3 /opt/recorder/recorder-core/scripts/ctrl_query.py status
-python3 /opt/recorder/recorder-core/scripts/ctrl_query.py dial number=<dial-number>
+python3 /opt/recorder/recorder-core/scripts/ctrl_query.py dial number=<mcu-number>
 python3 /opt/recorder/recorder-core/scripts/ctrl_query.py start_presentation
 ```
 
@@ -273,7 +273,7 @@ curl -s http://127.0.0.1:1985/api/v1/streams/ | python3 -m json.tool
 
 | 参数 | 说明 |
 |---|---|
-| `<meeting_id>` | 会议目录名，如 `20260520_820695` |
+| `<meeting_id>` | 会议目录名，如 `20260520_<dial-number>` |
 | `--mp4 <file>` | 处理指定 mp4（默认 main_01.mp4） |
 | `--overwrite` | 覆盖现有 `transcript.jsonl` |
 | `--append` | 追加（多段 mp4 串联用） |
@@ -292,7 +292,7 @@ curl -s http://127.0.0.1:1985/api/v1/streams/ | python3 -m json.tool
 ```bash
 SCR=/opt/recorder/asr/bridge/asr_offline.py
 PY=/opt/recorder/asr/venv/bin/python
-MID=20260520_820695
+MID=20260520_<dial-number>
 
 $PY $SCR $MID --mp4 main_01.mp4 --overwrite
 for n in 02 03 04 05 06 07 08 09; do

@@ -63,18 +63,22 @@
 
 ### .env 文件（gitignored）
 
-仓库根目录创建 `.env`：
+仓库根目录创建 `.env`（从 `.env.example` 复制再填值）：
 
 ```bash
-RECORDER_102_PASSWORD=<ftadmin 在 102 上的密码>
+RECORDER_HOST=<your-recorder-host-or-ip>
+RECORDER_USER=ftadmin
+RECORDER_SSH_PASSWORD=<your password>
+# 备录主机（可选）
+RECORDER_HOST_SECONDARY=
 ```
 
-`scripts/load_env.ps1` 把它加载到 PowerShell process scope；`scripts/askpass.cmd` 把它 echo 给 ssh/scp。**任何 `scripts/*.ps1` 都假设这个文件存在**。
+`scripts/load_env.ps1` 把它加载到 PowerShell process scope；`scripts/askpass.cmd` 把密码 echo 给 ssh/scp。**任何 `scripts/*.ps1` 都假设这个文件存在**。
 
 worktree 内**也需要一份**（git worktree 不共享非 git-tracked 文件），从主仓 cp 一下：
 
 ```powershell
-cp D:\MeetingRecord\.env .\.env
+cp <repo-root>\.env .\.env
 ```
 
 ### 行尾约定
@@ -105,7 +109,7 @@ cp D:\MeetingRecord\.env .\.env
 # ...
 
 # 推 102 测试（智能不重启 recorder-core，0 影响会议）
-.\scripts\upload_web.ps1 <recorder_host>
+.\scripts\upload_web.ps1   # uses RECORDER_HOST from .env
 
 # 浏览器 Ctrl+Shift+R 看效果
 ```
@@ -116,7 +120,7 @@ cp D:\MeetingRecord\.env .\.env
 # 编辑 web/app.py（加新 endpoint，改 LLM prompt 等）
 # ...
 
-.\scripts\upload_web.ps1 <recorder_host>
+.\scripts\upload_web.ps1   # uses RECORDER_HOST from .env
 # install_web.sh 自动判断 *.py 变了 → 重启 recorder-web（不重启 recorder-core）
 # Restart 时正在用 web 的浏览器 SSE 连接断开 1-2 秒（不影响 H.323 录像）
 ```
@@ -142,7 +146,7 @@ cp D:\MeetingRecord\.env .\.env
 # 编辑 scripts/asr/recorder-asr-bridge.py
 # ...
 
-.\scripts\install_asr.ps1 <recorder_host>
+.\scripts\install_asr.ps1   # uses RECORDER_HOST from .env
 # install_asr.sh 自动重启 recorder-asr-bridge（不动 recorder-core）
 ```
 
@@ -150,8 +154,8 @@ cp D:\MeetingRecord\.env .\.env
 
 ```powershell
 $pw = $env:RECORDER_102_PASSWORD
-scp -o ... scripts/asr/recorder-asr-bridge.py ftadmin@<recorder_host>:/opt/recorder/asr/bridge/recorder-asr-bridge.py
-ssh -o ... ftadmin@<recorder_host> "echo '$pw' | sudo -S systemctl restart recorder-asr-bridge"
+scp -o ... scripts/asr/recorder-asr-bridge.py ${RECORDER_USER}@${RECORDER_HOST}:/opt/recorder/asr/bridge/recorder-asr-bridge.py
+ssh -o ... ${RECORDER_USER}@${RECORDER_HOST} "echo '$pw' | sudo -S systemctl restart recorder-asr-bridge"
 ```
 
 ## C++ 编译（在 102 上做，开发机不编）
@@ -195,7 +199,7 @@ Windows 端 `upload_build.ps1` 就是把这套自动化。
 - 大部分调试是看 102 上的 journalctl：
 
 ```powershell
-ssh ftadmin@<recorder_host>
+ssh ${RECORDER_USER}@${RECORDER_HOST}
 journalctl -u recorder-core -f --since "5 min ago"   # 实时 follow
 journalctl -u recorder-asr-bridge -n 100 --no-pager  # 最近 100 行
 ```
@@ -210,7 +214,7 @@ tshark -r /tmp/cap.pcap -V | grep -A 20 enterH243TerminalID
 - Python bridge 本地调试：装 venv + pip install websockets，跑 `recorder-asr-bridge.py`，但 sherpa server 必须在 102（除非本机也装 sherpa-onnx）。所以一般直接在 102 改文件 + restart：
 
 ```bash
-ssh ftadmin@<recorder_host>
+ssh ${RECORDER_USER}@${RECORDER_HOST}
 sudo vim /opt/recorder/asr/bridge/recorder-asr-bridge.py
 sudo systemctl restart recorder-asr-bridge
 journalctl -u recorder-asr-bridge -f
@@ -265,13 +269,11 @@ git push origin <branch>:main   # fast-forward 合并
 git checkout main && git merge --ff-only <branch> && git push
 ```
 
-## 项目当前 Memory（重要历史决策摘要）
+## 历史经验教训
 
-详见 `~/.claude/projects/D--MeetingRecord/memory/`（仅 Claude 协作时存在）：
-
-- `recorder-core_project_state.md` — 全部已实现功能 + 已知问题 + 待测任务
-- `feedback_sudoers_crlf_lockout.md` — 5/8 sudoers 锁死事故 + 改用 path-unit
-- `project_102_github_downloads.md` — 102 服务器下 GitHub 大文件不稳，先本机下再 scp
+- **sudoers drop-in 触发服务重启** — 曾因 CRLF 让 visudo 拒绝并锁死整台机器 sudo。现已改用 systemd path-unit + 触发文件（`/opt/recorder/run/restart-recorder.flag`）。
+- **GitHub 大文件直接在服务器下载不稳** — 模型 / 二进制 tarball 建议先在开发机下，再 `scp` 到服务器。
+- **PASN_OctetString / H245_TerminalID 字符串赋值** — 必须用 `SetValue(BYTE*, len)`，不能用 `= "string"`（会被截到首个非可打印字节）。
 
 ## 添加新 LLM 功能的模板
 

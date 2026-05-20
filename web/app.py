@@ -152,15 +152,15 @@ def live_page():
 EDITABLE_FIELDS = [
     # ── 网关与终端身份 ────────────────────────────────────────────
     ("__group_gk", "网关 GK / 终端身份", None, None, None),
-    ("gk_host",     "GK 服务器地址", "text",     ("gk", "host"),     "例如 <gk_host>"),
-    ("gk_alias",    "终端 Alias",    "text",     ("gk", "alias"),    "例如 <alias-1>（同时作为 E.164 号注册到 GK，e164 字段自动跟随）"),
+    ("gk_host",     "GK 服务器地址", "text",     ("gk", "host"),     "GK / Gatekeeper 的 IP 或域名"),
+    ("gk_alias",    "终端 Alias",    "text",     ("gk", "alias"),    "终端在 GK 上注册的别名（同时作为 E.164 号，e164 字段自动跟随）"),
     ("gk_password", "GK 密码",       "password", ("gk", "password"), "留空保留原值；输入新值覆盖"),
     ("terminal_id", "终端显示名",    "text",     ("terminal_id",),   "MCU 名册中显示的中文名"),
 
     # ── 主动呼叫 ─────────────────────────────────────────────────
     ("__group_outgoing", "主动呼叫（开机自动拨号）", None, None, None),
     ("outgoing_enabled", "启用",       "checkbox", ("outgoing", "enabled"),     ""),
-    ("outgoing_dial",    "默认呼叫号",  "text",     ("outgoing", "dial_number"), "例如 <dial-number>"),
+    ("outgoing_dial",    "默认呼叫号",  "text",     ("outgoing", "dial_number"), "MCU 上要拨入的会议号 / E.164"),
     ("outgoing_mcu",     "MCU 直连 IP", "text",     ("outgoing", "mcu_host"),    "留空走 GK 路由"),
 
     # ── 视频录制质量 ─────────────────────────────────────────────

@@ -29,15 +29,15 @@
 ### 防火墙最小配置（firewalld）
 
 ```bash
-# 假定 GK/MCU 在 <gk_network>.0/24
+# 假定 GK/MCU 在 <gk-network>/24
 sudo firewall-cmd --permanent --new-zone=h323
-sudo firewall-cmd --permanent --zone=h323 --add-source=<gk_network>.0/24
+sudo firewall-cmd --permanent --zone=h323 --add-source=<gk-network>/24
 sudo firewall-cmd --permanent --zone=h323 --add-port=1720/tcp
 sudo firewall-cmd --permanent --zone=h323 --add-port=20000-20200/udp
 
 # 内网（教委办公网段）能访问 web 管理页
 sudo firewall-cmd --permanent --new-zone=office
-sudo firewall-cmd --permanent --zone=office --add-source=<office_network>.0/24
+sudo firewall-cmd --permanent --zone=office --add-source=<office-network>/24
 sudo firewall-cmd --permanent --zone=office --add-port=8088/tcp
 
 # 默认拒绝其它（包括 1935 / 8080 / 1985 / 9001 / 6006）
@@ -52,11 +52,11 @@ sudo firewall-cmd --reload
 
 ```bash
 # H.323 信令
-iptables -A INPUT -p tcp --dport 1720 -s <gk_network>.0/24 -j ACCEPT
-iptables -A INPUT -p udp --dport 20000:20200 -s <gk_network>.0/24 -j ACCEPT
+iptables -A INPUT -p tcp --dport 1720 -s <gk-network>/24 -j ACCEPT
+iptables -A INPUT -p udp --dport 20000:20200 -s <gk-network>/24 -j ACCEPT
 
 # Web 管理
-iptables -A INPUT -p tcp --dport 8088 -s <office_network>.0/24 -j ACCEPT
+iptables -A INPUT -p tcp --dport 8088 -s <office-network>/24 -j ACCEPT
 
 # 本机内部回环（必须）
 iptables -A INPUT -i lo -j ACCEPT
@@ -214,10 +214,10 @@ python3 -m venv /opt/recorder/asr/venv
 ```bash
 # 5.1 从 Windows 本机用 scripts/upload_web.ps1 一键部署
 # (脚本会 scp web/ 全部文件 + 跑 install_web.sh)
-.\scripts\upload_web.ps1 <recorder_host>
+.\scripts\upload_web.ps1   # uses RECORDER_HOST from .env
 
 # 5.2 在 102 上：跑 install_asr.sh 安装 ASR 两个服务
-.\scripts\install_asr.ps1 <recorder_host>
+.\scripts\install_asr.ps1   # uses RECORDER_HOST from .env
 
 # 5.3 init web 用户（首次必须）
 sudo python3 /opt/recorder/web/setup_user.py admin   # 设密码
@@ -255,7 +255,7 @@ done   # 期望全 active
 journalctl -u recorder-core -n 20 | grep 'registered with GK'
 
 # 6.3 浏览器登录管理页
-# http://<recorder_host>:8088/login
+# http://<recorder-host>:8088/login
 
 # 6.4 触发一次 sudoless restart 测试
 echo "$(date)" > /opt/recorder/run/restart-recorder.flag
@@ -269,7 +269,7 @@ systemctl status recorder-core | head -5
 
 ```bash
 # Windows 本机
-.\scripts\upload_web.ps1 <recorder_host>
+.\scripts\upload_web.ps1   # uses RECORDER_HOST from .env
 ```
 
 新版 `install_web.sh`（commit `303b239`+）会**智能判断**：

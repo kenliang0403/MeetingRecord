@@ -1,9 +1,10 @@
 {
+  "_comment_": "Template config — copy to /opt/recorder/config/config.json on the recorder host and fill in your GK / MCU settings. See docs/deployment.md.",
   "gk": {
-    "host":     "<gk_host>",
+    "host":     "",
     "port":     1719,
-    "alias":    "<alias-1>",
-    "e164":     "<alias-1>",
+    "alias":    "",
+    "e164":     "",
     "ttl":      60,
     "username": "",
     "password": ""
@@ -24,7 +25,7 @@
   },
   "outgoing": {
     "enabled":           false,
-    "dial_number":       "<dial-number>",
+    "dial_number":       "",
     "mcu_host":          "",
     "reconnect":         true,
     "reconnect_delay_s": 10,
@@ -44,7 +45,7 @@
     "reconnect_delay_ms":  2000
   },
   "auto_send_video": true,
-  "terminal_id": "TE录播设备",
+  "terminal_id": "Recorder",
   "log_dir":   "/opt/recorder/logs",
   "log_level": "info"
 }

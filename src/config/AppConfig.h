@@ -52,7 +52,7 @@ struct TcpConfig {
 struct StreamingConfig {
     bool        enabled         = false;
     // RTMP 基地址。SRS 安全策略只允许 127.0.0.1 推流，所以本机推 loopback。
-    // 播放地址仍用 <recorder_host>:1935 / :8080，由 SRS 路由。
+    // 播放地址走宿主机的 :1935 / :8080，由 SRS 路由（详见 docs/deployment.md）。
     std::string rtmp_server     = "rtmp://127.0.0.1/live";
     // stream key 模板。占位符：{meeting} = 会议号 / 被叫号码
     std::string main_key_tpl    = "recorder-{meeting}-main";

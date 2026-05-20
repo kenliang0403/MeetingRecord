@@ -18,6 +18,11 @@ if [ -z "$PW" ]; then
 fi
 SUDO() { echo "$PW" | sudo -S -p '' "$@"; }
 
+# The user that owns /opt/recorder/web, /opt/recorder/run, auth.json, etc.
+# and runs recorder-core / recorder-web. Defaults to ftadmin to match our
+# reference setup; .ps1 wrappers pass RUN_USER='<user>' to override.
+RUN_USER="${RUN_USER:-ftadmin}"
+
 WEB_SRC="/opt/recorder/recorder-core/web"
 WEB_DST="/opt/recorder/web"
 SCRIPT_SRC="/opt/recorder/recorder-core/scripts"
@@ -41,7 +46,7 @@ SUDO mkdir -p "${WEB_DST}/templates" "${WEB_DST}/static"
 SUDO rsync -a --delete \
   --exclude 'auth.json' --exclude '.flask_secret' \
   "${WEB_SRC}/" "${WEB_DST}/"
-SUDO chown -R ftadmin:ftadmin "${WEB_DST}"
+SUDO chown -R ${RUN_USER}:${RUN_USER} "${WEB_DST}"
 
 PY_HASH_AFTER=$(_py_hash)
 NEED_WEB_RESTART=0
@@ -63,24 +68,45 @@ echo "[3/8] install start-foreground.sh"
 SUDO install -m 0755 -o root -g root \
   "${SCRIPT_SRC}/start-foreground.sh" /opt/recorder/scripts/start-foreground.sh
 
+# Service unit files in the repo are templated with User=ftadmin /
+# /home/ftadmin. If the deploy user is different, materialise a renamed
+# copy under /tmp before installing.
+_render_unit() {
+    local src="$1" out="$2"
+    if [ "${RUN_USER}" = "ftadmin" ]; then
+        cp "$src" "$out"
+    else
+        sed -e "s/^User=ftadmin/User=${RUN_USER}/" \
+            -e "s/^Group=ftadmin/Group=${RUN_USER}/" \
+            -e "s|/home/ftadmin|/home/${RUN_USER}|g" \
+            "$src" > "$out"
+    fi
+}
+
 echo "[4/8] install / refresh recorder-core.service"
 NEED_CORE_RESTART=0
 CORE_UNIT_DST=/etc/systemd/system/recorder-core.service
-if [ ! -f "$CORE_UNIT_DST" ] || ! cmp -s "${WEB_DST}/recorder-core.service" "$CORE_UNIT_DST"; then
-    SUDO cp "${WEB_DST}/recorder-core.service" "$CORE_UNIT_DST"
+CORE_UNIT_TMP=/tmp/recorder-core.service.rendered
+_render_unit "${WEB_DST}/recorder-core.service" "$CORE_UNIT_TMP"
+if [ ! -f "$CORE_UNIT_DST" ] || ! cmp -s "$CORE_UNIT_TMP" "$CORE_UNIT_DST"; then
+    SUDO cp "$CORE_UNIT_TMP" "$CORE_UNIT_DST"
     NEED_CORE_RESTART=1
     echo "    unit changed → will restart recorder-core (active call WILL drop)"
 else
     echo "    unit unchanged → keep recorder-core running (active call safe)"
 fi
+rm -f "$CORE_UNIT_TMP"
 
 echo "[5/8] install / refresh recorder-web.service"
 WEB_UNIT_DST=/etc/systemd/system/recorder-web.service
-if [ ! -f "$WEB_UNIT_DST" ] || ! cmp -s "${WEB_DST}/recorder-web.service" "$WEB_UNIT_DST"; then
-    SUDO cp "${WEB_DST}/recorder-web.service" "$WEB_UNIT_DST"
+WEB_UNIT_TMP=/tmp/recorder-web.service.rendered
+_render_unit "${WEB_DST}/recorder-web.service" "$WEB_UNIT_TMP"
+if [ ! -f "$WEB_UNIT_DST" ] || ! cmp -s "$WEB_UNIT_TMP" "$WEB_UNIT_DST"; then
+    SUDO cp "$WEB_UNIT_TMP" "$WEB_UNIT_DST"
     NEED_WEB_RESTART=1
     echo "    unit changed → will restart recorder-web"
 fi
+rm -f "$WEB_UNIT_TMP"
 
 echo "[6/8] install recorder-restart path/service units (sudoless restart trigger)"
 # web 写 /opt/recorder/run/restart-recorder.flag → systemd path unit (root)
@@ -89,7 +115,7 @@ echo "[6/8] install recorder-restart path/service units (sudoless restart trigge
 SUDO cp "${WEB_DST}/recorder-restart.path"    /etc/systemd/system/recorder-restart.path
 SUDO cp "${WEB_DST}/recorder-restart.service" /etc/systemd/system/recorder-restart.service
 SUDO mkdir -p /opt/recorder/run
-SUDO chown ftadmin:ftadmin /opt/recorder/run
+SUDO chown ${RUN_USER}:${RUN_USER} /opt/recorder/run
 # 清理早期版本遗留的 sudoers drop-in（已废弃，曾因 CRLF 导致 sudo 锁死）
 SUDO rm -f /etc/sudoers.d/recorder-web
 
@@ -131,7 +157,7 @@ SUDO systemctl enable --now recorder-restart.path 2>/dev/null
 if [ ! -f "${WEB_DST}/auth.json" ]; then
   echo '{"users":{}}' | SUDO tee "${WEB_DST}/auth.json" >/dev/null
   SUDO chmod 600 "${WEB_DST}/auth.json"
-  SUDO chown ftadmin:ftadmin "${WEB_DST}/auth.json"
+  SUDO chown ${RUN_USER}:${RUN_USER} "${WEB_DST}/auth.json"
   echo ""
   echo "  ⚠ auth.json was missing; created empty. Add a user with:"
   echo "      sudo python3 ${WEB_DST}/setup_user.py admin"

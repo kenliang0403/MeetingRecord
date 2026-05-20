@@ -77,7 +77,7 @@
 **5/8 踩坑**：原方案是 web app `subprocess.run(["sudo", "systemctl", "restart", ...])` + 装 `/etc/sudoers.d/recorder-web` 放行 NOPASSWD。Windows git checkout 把 sudoers 文件转 CRLF，visudo 拒绝整个文件 → **整台机器 sudo 完全锁死**。
 
 替代方案：
-- web 写 `/opt/recorder/run/restart-recorder.flag`（ftadmin 拥有，无需 sudo）
+- web 写 `/opt/recorder/run/restart-recorder.flag`（recorder 运行用户拥有，无需 sudo）
 - `recorder-restart.path`（root 跑，PathChanged 监听）触发
 - `recorder-restart.service`（root 跑）执行 `systemctl restart recorder-core`
 

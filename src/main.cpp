@@ -242,8 +242,8 @@ void RecorderApp::Main()
     });
 
     // ── set: change a single config key at runtime ─────────────────────────
-    // Usage: {"cmd":"set","key":"gk.host","value":"<gk_host>"}
-    //        {"cmd":"set","key":"outgoing.dial_number","value":"<dial-number>"}
+    // Usage: {"cmd":"set","key":"gk.host","value":"<gk-host>"}
+    //        {"cmd":"set","key":"outgoing.dial_number","value":"<mcu-number>"}
     //        {"cmd":"set","key":"log_level","value":"debug"}
     ctrlServer.registerHandler("set", [&](const nlohmann::json& req) {
         std::string key   = req.value("key",   "");

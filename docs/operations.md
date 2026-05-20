@@ -5,7 +5,7 @@
 ## 1. 健康检查（5 秒确认全栈）
 
 ```bash
-ssh ftadmin@<recorder_host>
+ssh ${RECORDER_USER}@${RECORDER_HOST}
 
 # 4 个服务存活
 for s in recorder-core recorder-web recorder-asr recorder-asr-bridge; do
@@ -313,7 +313,7 @@ journalctl -u recorder-asr --since "$START" --no-pager | grep -c "Cannot find ID
 详见 [docs/deployment.md](deployment.md#升级流程)。简言：
 
 ```powershell
-.\scripts\upload_web.ps1 <recorder_host>
+.\scripts\upload_web.ps1   # uses RECORDER_HOST from .env
 ```
 
 智能不重启逻辑（commit `303b239`）：
@@ -401,17 +401,17 @@ grep "NEED_CORE_RESTART" /opt/recorder/recorder-core/scripts/install_web.sh
 
 ```bash
 # 看当前通话
-ssh ftadmin@<recorder_host> 'python3 /opt/recorder/recorder-core/scripts/ctrl_query.py status'
+ssh ${RECORDER_USER}@${RECORDER_HOST} 'python3 /opt/recorder/recorder-core/scripts/ctrl_query.py status'
 
 # 触发 recorder-core 重启
-ssh ftadmin@<recorder_host> 'echo "$(date)" > /opt/recorder/run/restart-recorder.flag'
+ssh ${RECORDER_USER}@${RECORDER_HOST} 'echo "$(date)" > /opt/recorder/run/restart-recorder.flag'
 
 # 直接重启 bridge
-ssh ftadmin@<recorder_host> 'echo $PW | sudo -S systemctl restart recorder-asr-bridge'
+ssh ${RECORDER_USER}@${RECORDER_HOST} 'echo $PW | sudo -S systemctl restart recorder-asr-bridge'
 
 # 看磁盘 + 最近 10 个会议
-ssh ftadmin@<recorder_host> 'df -h /opt/recorder; ls -lhS /opt/recorder/recordings/[0-9]* 2>/dev/null | tail -10'
+ssh ${RECORDER_USER}@${RECORDER_HOST} 'df -h /opt/recorder; ls -lhS /opt/recorder/recordings/[0-9]* 2>/dev/null | tail -10'
 
 # tail bridge heartbeat
-ssh ftadmin@<recorder_host> "journalctl -u recorder-asr-bridge -f --since '5 min ago' | grep heartbeat"
+ssh ${RECORDER_USER}@${RECORDER_HOST} "journalctl -u recorder-asr-bridge -f --since '5 min ago' | grep heartbeat"
 ```

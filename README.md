@@ -97,12 +97,16 @@ echo "$(date)" > /opt/recorder/run/restart-recorder.flag
 
 首次部署看 [docs/deployment.md](docs/deployment.md)。代码改动开发流程看 [docs/development.md](docs/development.md)。
 
-## 生产部署位置
+## 生产部署位置（示例）
+
+按业务需要部署 1 台或 2 台（HA / 备录）。每台在 GK 上用不同 alias 注册。
 
 | 主机 | 角色 | alias |
 |---|---|---|
-| <recorder_host> | 主录播 | <alias-3> |
-| <recorder_host_secondary> | 备录播 / 模拟器 | <alias-2> |
+| `<recorder_host>` | 主录播 | `<alias-1>` |
+| `<recorder_host_secondary>` | 备录播 / 模拟器 | `<alias-2>` |
+
+主机地址在 `.env`（见 `.env.example`）和 `/opt/recorder/config/config.json` 里填。
 
 ## 依赖
 
@@ -123,4 +127,4 @@ echo "$(date)" > /opt/recorder/run/restart-recorder.flag
 
 ## License
 
-Internal. See [docs/](docs/) for technical detail.
+See [LICENSE](LICENSE) (if present). Technical details under [docs/](docs/).

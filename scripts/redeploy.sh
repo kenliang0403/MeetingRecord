@@ -20,6 +20,11 @@ if [ -z "$PW" ]; then
 fi
 SUDO() { echo "$PW" | sudo -S -p '' "$@"; }
 
+# The user that owns /opt/recorder/run and runs the recorder services.
+# Defaults to ftadmin to match our reference setup; override via env from
+# the calling .ps1 wrapper if your deploy user is different.
+RUN_USER="${RUN_USER:-ftadmin}"
+
 BUILD_BIN=/opt/recorder/recorder-core/build/recorder-core
 LIVE_BIN=/opt/recorder/bin/recorder-core
 TRIGGER=/opt/recorder/run/restart-recorder.flag
@@ -37,11 +42,11 @@ SUDO install -m 0755 "$BUILD_BIN" "$LIVE_BIN"
 ls -l "$LIVE_BIN"
 
 # 2) trigger systemd to restart via the path-unit. /opt/recorder/run/ is
-#    chowned ftadmin:ftadmin by install_web.sh, so writing the flag file
+#    chowned to the deploy user by install_web.sh, so writing the flag file
 #    needs no sudo.
 if [ ! -d "$(dirname "$TRIGGER")" ]; then
     SUDO mkdir -p "$(dirname "$TRIGGER")"
-    SUDO chown ftadmin:ftadmin "$(dirname "$TRIGGER")"
+    SUDO chown "${RUN_USER}:${RUN_USER}" "$(dirname "$TRIGGER")"
 fi
 date '+%Y-%m-%d %H:%M:%S' > "$TRIGGER"
 
