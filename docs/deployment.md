@@ -103,9 +103,8 @@ iptables -P INPUT DROP
 │   └── bridge/
 │       ├── recorder-asr-bridge.py
 │       └── asr_offline.py
-├── scripts/                       # 启动/控制脚本（早期）
-│   ├── start.sh / start-foreground.sh
-│   └── ctrl_query.py              # TCP 9001 客户端
+├── scripts/                       # 启动脚本（systemd ExecStart 引用）
+│   └── start-foreground.sh
 └── recorder-core/                 # **源码仓库 clone 位置**
     ├── src/ web/ scripts/ ...
     └── build/                     # cmake 输出
@@ -207,30 +206,35 @@ python3 -m venv /opt/recorder/asr/venv
 /opt/recorder/asr/venv/bin/python -c "import websockets; print(websockets.__version__)"   # 11.0.3 OK
 ```
 
-**102 国内访问 GitHub release 大文件不稳定**，建议先在 Windows 本机下载再 scp 到 102。
+**国内访问 GitHub release 大文件不稳定**，建议先在本机下载再 scp 到服务器。
 
 ### 5. 部署 recorder-web + 4 个 systemd 服务
 
-```bash
-# 5.1 从 Windows 本机用 scripts/upload_web.ps1 一键部署
-# (脚本会 scp web/ 全部文件 + 跑 install_web.sh)
-.\scripts\upload_web.ps1   # uses RECORDER_HOST from .env
+直接在 recorder 主机上跑：
 
-# 5.2 在 102 上：跑 install_asr.sh 安装 ASR 两个服务
-.\scripts\install_asr.ps1   # uses RECORDER_HOST from .env
+```bash
+SUDO_PW='<your sudo password>'
+
+# 5.1 装 Flask + gunicorn + recorder-core/web 4 个 unit
+bash /opt/recorder/recorder-core/scripts/install_web.sh "$SUDO_PW"
+
+# 5.2 装 ASR 两个 unit
+bash /opt/recorder/recorder-core/scripts/asr/install_asr.sh "$SUDO_PW"
 
 # 5.3 init web 用户（首次必须）
 sudo python3 /opt/recorder/web/setup_user.py admin   # 设密码
 
 # 5.4 配置 LLM（在 web 管理页 /config 填，或直接编辑 /opt/recorder/config/config.json）
-{
-  "llm": {
-    "base_url": "https://api.deepseek.com",
-    "api_key":  "sk-xxxxxxxxxxxxxxxx",
-    "model":    "deepseek-chat"
-  }
-}
+# {
+#   "llm": {
+#     "base_url": "https://api.deepseek.com",
+#     "api_key":  "sk-xxxxxxxxxxxxxxxx",
+#     "model":    "deepseek-chat"
+#   }
+# }
 ```
+
+如果运行用户不是 `ftadmin`，加 `RUN_USER=youruser` 前缀。详见 [`scripts/README.md`](../scripts/README.md)。
 
 `install_web.sh` 安装的服务：
 
@@ -268,8 +272,9 @@ systemctl status recorder-core | head -5
 ### 升级 web 代码（仅前端 / 仅 .py / 仅 unit）
 
 ```bash
-# Windows 本机
-.\scripts\upload_web.ps1   # uses RECORDER_HOST from .env
+ssh <user>@<recorder_host>
+cd /opt/recorder/recorder-core && git pull
+bash scripts/install_web.sh "$SUDO_PW"
 ```
 
 新版 `install_web.sh`（commit `303b239`+）会**智能判断**：
@@ -285,20 +290,20 @@ systemctl status recorder-core | head -5
 ### 升级 recorder-core 二进制
 
 ```bash
-# Windows 本机
-.\scripts\upload_build.ps1   # 默认 102
-.\scripts\deploy_104.ps1     # 104
-
-# 新版 redeploy.sh（commit `1133c2b`+）用 install(1) atomic 替换 binary +
-# 写触发文件让 path-unit 重启 systemd。同文件系统 rename，**不动 config.json**。
+ssh <user>@<recorder_host>
+cd /opt/recorder/recorder-core && git pull
+cd build && sudo cmake --build . --target recorder-core -j
+bash ../scripts/redeploy.sh "$SUDO_PW"
 ```
+
+`redeploy.sh` 用 `install(1)` atomic 替换 binary + 写触发文件让 path-unit 重启 systemd。同文件系统 rename，**不动 config.json**。
 
 ### 升级 ASR 模型 / hotwords
 
 ```bash
-# Windows 本机直接 scp 新文件
-scp scripts/asr/hotwords_default.txt ftadmin@102:/opt/recorder/asr/models/hotwords.txt
-ssh ftadmin@102 "sudo systemctl restart recorder-asr"
+# 本机下好新模型 / hotwords 后 scp 到服务器
+scp hotwords_new.txt <user>@<recorder_host>:/opt/recorder/asr/models/hotwords.txt
+ssh <user>@<recorder_host> "sudo systemctl restart recorder-asr"
 # bridge 会自动重连 sherpa
 ```
 

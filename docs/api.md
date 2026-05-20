@@ -141,7 +141,6 @@ server → client:  {"ok":true,"data":{...}}\n     # 成功
 ### Python 客户端示例
 
 ```python
-# /opt/recorder/recorder-core/scripts/ctrl_query.py
 import socket, json
 def send(cmd_dict):
     s = socket.socket(); s.settimeout(5)
@@ -157,14 +156,14 @@ def send(cmd_dict):
 
 print(send({"cmd": "status"}))
 print(send({"cmd": "dial", "number": "<mcu-number>"}))
+print(send({"cmd": "start_presentation"}))
 ```
 
-CLI 包装：
+shell 一行（netcat）：
 
 ```bash
-python3 /opt/recorder/recorder-core/scripts/ctrl_query.py status
-python3 /opt/recorder/recorder-core/scripts/ctrl_query.py dial number=<mcu-number>
-python3 /opt/recorder/recorder-core/scripts/ctrl_query.py start_presentation
+echo '{"cmd":"status"}'  | nc -q 1 127.0.0.1 9001
+echo '{"cmd":"dial","number":"<mcu-number>"}' | nc -q 1 127.0.0.1 9001
 ```
 
 ### 重要：必须发 JSON，不要发纯文本

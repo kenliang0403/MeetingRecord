@@ -105,7 +105,7 @@ DeepSeek 默认 `max_tokens=4096`，240 句一次性给 LLM 输出会被 truncat
 
 ### 5. 为什么 install_web.sh 智能不重启
 
-`upload_web.ps1` 每次都跑 install_web.sh。原版无条件 `systemctl restart recorder-core` + `restart recorder-web`，即使只动了 `live.js` 也会**打断会议 ~5s**。
+每次升级 web 都跑 `install_web.sh`。原版无条件 `systemctl restart recorder-core` + `restart recorder-web`，即使只动了 `live.js` 也会**打断会议 ~5s**。
 
 修复（commit `303b239`）：
 - 比较 unit 文件 hash 没变 → 不重启 core

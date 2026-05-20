@@ -34,22 +34,16 @@
 │   ├── recorder-web.service
 │   ├── recorder-restart.path
 │   └── recorder-restart.service
-├── scripts/                # 部署 + 运维脚本
-│   ├── upload_build.ps1    # 推 src 改动到 102 + remote build + redeploy
-│   ├── deploy_104.ps1      # 同上，到 104
-│   ├── upload_web.ps1      # 推 web 改动到 102 / 104
-│   ├── install_asr.ps1     # 推 ASR 改动
-│   ├── redeploy.sh         # 102 上 install binary + 触发重启（atomic）
-│   ├── deploy_104.sh       # 104 上 build + install binary
-│   ├── install_web.sh      # 102/104 上 install web + systemd unit（智能不重启）
-│   ├── install_asr.sh
-│   ├── ctrl_query.py       # TCP 9001 客户端 CLI
-│   ├── load_env.ps1        # 读 .env 加载到当前 PowerShell session
-│   ├── askpass.cmd / .sh   # ssh/scp 自动应答密码（读 RECORDER_102_PASSWORD）
+├── scripts/                # 部署核心脚本（公开）
+│   ├── README.md           # 使用说明
+│   ├── build.sh            # 首次部署：编译 H323Plus/PTLib/FFmpeg/recorder-core
+│   ├── install_web.sh      # 装 web + 4 个 systemd unit（智能不重启）
+│   ├── redeploy.sh         # atomic install binary + 触发 systemd 重启
+│   ├── start-foreground.sh # systemd ExecStart 入口
 │   └── asr/
-│       ├── recorder-asr-bridge.py
-│       ├── asr_offline.py
-│       ├── install_asr.sh
+│       ├── recorder-asr-bridge.py        # ffmpeg → sherpa → transcript 桥
+│       ├── asr_offline.py                # 离线 rescue 字幕
+│       ├── install_asr.sh                # 装 ASR 2 个 unit
 │       ├── recorder-asr.service
 │       ├── recorder-asr-bridge.service
 │       └── hotwords_default.txt   # 902 行教育领域热词
@@ -63,23 +57,18 @@
 
 ### .env 文件（gitignored）
 
-仓库根目录创建 `.env`（从 `.env.example` 复制再填值）：
+如果你写自己的 Windows 部署包装脚本，仓库根目录创建 `.env`（从 `.env.example` 复制再填值）：
 
 ```bash
 RECORDER_HOST=<your-recorder-host-or-ip>
 RECORDER_USER=ftadmin
 RECORDER_SSH_PASSWORD=<your password>
-# 备录主机（可选）
 RECORDER_HOST_SECONDARY=
 ```
 
-`scripts/load_env.ps1` 把它加载到 PowerShell process scope；`scripts/askpass.cmd` 把密码 echo 给 ssh/scp。**任何 `scripts/*.ps1` 都假设这个文件存在**。
+公开仓库里**不包含** PowerShell 部署包装脚本（含开发者私人主机/账号信息），但 `.env.example` 是模板，可作为参考。
 
-worktree 内**也需要一份**（git worktree 不共享非 git-tracked 文件），从主仓 cp 一下：
-
-```powershell
-cp <repo-root>\.env .\.env
-```
+如果你直接在服务器上跑 `bash scripts/install_web.sh "$SUDO_PW"`，根本不需要 `.env`。
 
 ### 行尾约定
 
@@ -100,62 +89,50 @@ cp <repo-root>\.env .\.env
 
 新增 Linux-only 文件类型记得加进 `.gitattributes`。
 
-## 三种典型开发流程
+## 四种典型开发流程
+
+> 假设源码已在服务器 `/opt/recorder/recorder-core`，`$REC=<user>@<recorder_host>` 是部署主机，`$SUDO_PW` 是 sudo 密码。
+> Windows 开发者一般会自己写一个 `.ps1` 包装把下面这几步合一行（参考 [`scripts/README.md`](../scripts/README.md)）。
 
 ### A. 前端改动（live.js / player.js / template / css）
 
-```powershell
-# 编辑 web/static/live.js
-# ...
+本地编辑后推上去 → 跑 install_web.sh，**不重启 recorder-core / recorder-web**：
 
-# 推 102 测试（智能不重启 recorder-core，0 影响会议）
-.\scripts\upload_web.ps1   # uses RECORDER_HOST from .env
-
+```bash
+git add -u && git commit -m "..." && git push
+ssh $REC "cd /opt/recorder/recorder-core && git pull && bash scripts/install_web.sh '$SUDO_PW'"
 # 浏览器 Ctrl+Shift+R 看效果
 ```
 
 ### B. Web Python 改动（app.py / auth.py）
 
-```powershell
-# 编辑 web/app.py（加新 endpoint，改 LLM prompt 等）
-# ...
-
-.\scripts\upload_web.ps1   # uses RECORDER_HOST from .env
-# install_web.sh 自动判断 *.py 变了 → 重启 recorder-web（不重启 recorder-core）
-# Restart 时正在用 web 的浏览器 SSE 连接断开 1-2 秒（不影响 H.323 录像）
-```
+同上。`install_web.sh` 自动判断 `*.py` 变了 → 重启 `recorder-web`（不重启 recorder-core）。SSE 断开 1-2s。
 
 ### C. recorder-core C++ 改动
 
-```powershell
-# 编辑 src/h323/RecorderConnection.cpp 等
-# ...
-
-.\scripts\upload_build.ps1
-# 自动：scp 改动文件 → ssh 102 跑 cmake build → 跑 redeploy.sh
-# redeploy.sh 用 install(1) atomic 替换 binary + 写触发文件让 path-unit 重启
-# **不动 /opt/recorder/config/config.json**
-
-# 也可以同时部署到 104：
-.\scripts\deploy_104.ps1
+```bash
+git push
+ssh $REC bash -lc "'
+  cd /opt/recorder/recorder-core && git pull && \
+  cd build && sudo cmake --build . --target recorder-core -j && \
+  bash ../scripts/redeploy.sh \"$SUDO_PW\"
+'"
 ```
+
+`redeploy.sh` 用 `install(1)` atomic 替换 binary + 写触发文件让 path-unit 重启 systemd。**不动 `/opt/recorder/config/config.json`**。
 
 ### D. ASR / 字幕相关（bridge.py / hotwords）
 
-```powershell
-# 编辑 scripts/asr/recorder-asr-bridge.py
-# ...
-
-.\scripts\install_asr.ps1   # uses RECORDER_HOST from .env
-# install_asr.sh 自动重启 recorder-asr-bridge（不动 recorder-core）
+```bash
+git push
+ssh $REC "cd /opt/recorder/recorder-core && git pull && bash scripts/asr/install_asr.sh '$SUDO_PW'"
 ```
 
-或者紧急 hot-patch 不动 install_asr.sh（避免重启 sherpa）：
+紧急 hot-patch（不重启 sherpa，只更新 bridge）：
 
-```powershell
-$pw = $env:RECORDER_102_PASSWORD
-scp -o ... scripts/asr/recorder-asr-bridge.py ${RECORDER_USER}@${RECORDER_HOST}:/opt/recorder/asr/bridge/recorder-asr-bridge.py
-ssh -o ... ${RECORDER_USER}@${RECORDER_HOST} "echo '$pw' | sudo -S systemctl restart recorder-asr-bridge"
+```bash
+scp scripts/asr/recorder-asr-bridge.py $REC:/opt/recorder/asr/bridge/recorder-asr-bridge.py
+ssh $REC "echo '$SUDO_PW' | sudo -S systemctl restart recorder-asr-bridge"
 ```
 
 ## C++ 编译（在 102 上做，开发机不编）
@@ -186,7 +163,7 @@ sudo install -m 0755 ./recorder-core /opt/recorder/bin/recorder-core
 echo "$(date)" > /opt/recorder/run/restart-recorder.flag
 ```
 
-Windows 端 `upload_build.ps1` 就是把这套自动化。
+Windows 端可以写一个 `.ps1` 包装把上面这套自动化。仓库不带（含主机/账号信息），参考 [`scripts/README.md`](../scripts/README.md) 的最小实现示例。
 
 ### 关键编译坑
 

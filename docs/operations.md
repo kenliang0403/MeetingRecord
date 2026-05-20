@@ -298,10 +298,12 @@ journalctl -u recorder-asr --since "$START" --no-pager | grep -c "Cannot find ID
 
 ## 7. 升级 recorder-core binary（hot swap）
 
-```powershell
-# Windows 本机
-.\scripts\upload_build.ps1   # 102
-.\scripts\deploy_104.ps1     # 104
+```bash
+ssh ${RECORDER_USER}@${RECORDER_HOST} bash -lc "'
+  cd /opt/recorder/recorder-core && git pull && \
+  cd build && sudo cmake --build . --target recorder-core -j && \
+  bash ../scripts/redeploy.sh \"$SUDO_PW\"
+'"
 ```
 
 新版 redeploy.sh 用 `install -m 0755 src dst`（atomic rename）+ 触发文件机制。**会议进行中也可热替换**（旧 binary 的 process 继续跑直到 systemd restart 把它 KILL 重启）。
@@ -312,8 +314,8 @@ journalctl -u recorder-asr --since "$START" --no-pager | grep -c "Cannot find ID
 
 详见 [docs/deployment.md](deployment.md#升级流程)。简言：
 
-```powershell
-.\scripts\upload_web.ps1   # uses RECORDER_HOST from .env
+```bash
+ssh ${RECORDER_USER}@${RECORDER_HOST} "cd /opt/recorder/recorder-core && git pull && bash scripts/install_web.sh '$SUDO_PW'"
 ```
 
 智能不重启逻辑（commit `303b239`）：
@@ -369,18 +371,17 @@ sudo systemctl restart recorder-web
 | 改 web/app.py | ❌ 不中断录像 | 1-2s SSE 闪断 | 字幕短暂卡顿 |
 | 改 web/*.service | 取决于哪个 | recorder-web 自动重启 | 同上 |
 | 改 recorder-core.service | ✅ 中断 5-10s | MCU 30s 内重拨 | 会议短暂掉线 |
-| upload_build.ps1（C++ 改动） | ✅ 中断 5-10s | 同上 | 同上 |
-| install_asr.ps1 | ❌ 不中断 | bridge 2-3s 内重连 sherpa | 字幕短暂中断 |
+| redeploy.sh（C++ 改动） | ✅ 中断 5-10s | 同上 | 同上 |
+| asr/install_asr.sh | ❌ 不中断 | bridge 2-3s 内重连 sherpa | 字幕短暂中断 |
 | 升级 sherpa server | ❌ 不中断录像 | 同上 | 字幕中断 30-60s（模型加载） |
 
 ## 12. 防止 install_web.sh 意外重启 recorder-core
 
-新版（commit `303b239`+）已经智能判断。**确认 102 上的 install_web.sh 是新版**：
+新版 `install_web.sh` 已经智能判断。**确认服务器上的 install_web.sh 是新版**：
 
 ```bash
 grep "NEED_CORE_RESTART" /opt/recorder/recorder-core/scripts/install_web.sh
-# 应该有几处匹配；如果 grep 无匹配 → 102 上是旧版，先 scp 新的：
-# scp scripts/install_web.sh ftadmin@102:/opt/recorder/recorder-core/scripts/install_web.sh
+# 应该有几处匹配；如果 grep 无匹配 → 服务器上是旧版，git pull 一下源码就行
 ```
 
 ## 13. 应急联系信息
@@ -400,8 +401,8 @@ grep "NEED_CORE_RESTART" /opt/recorder/recorder-core/scripts/install_web.sh
 ## 附：常用 ssh 一行命令
 
 ```bash
-# 看当前通话
-ssh ${RECORDER_USER}@${RECORDER_HOST} 'python3 /opt/recorder/recorder-core/scripts/ctrl_query.py status'
+# 看当前通话（直接调 TCP 9001，避免依赖额外的客户端脚本）
+ssh ${RECORDER_USER}@${RECORDER_HOST} "echo '{\"cmd\":\"status\"}' | nc -q 1 127.0.0.1 9001"
 
 # 触发 recorder-core 重启
 ssh ${RECORDER_USER}@${RECORDER_HOST} 'echo "$(date)" > /opt/recorder/run/restart-recorder.flag'

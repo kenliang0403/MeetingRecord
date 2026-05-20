@@ -88,8 +88,8 @@ done
 # 浏览器打开 web 管理页（首次需登录）
 # http://<server>:8088/
 
-# 当前通话状态
-python3 /opt/recorder/recorder-core/scripts/ctrl_query.py status
+# 当前通话状态（直接调本机 TCP 9001）
+echo '{"cmd":"status"}' | nc -q 1 127.0.0.1 9001
 
 # 重启 recorder-core（path-unit 触发，无需 sudo）
 echo "$(date)" > /opt/recorder/run/restart-recorder.flag
