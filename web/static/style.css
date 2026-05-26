@@ -210,23 +210,30 @@ canvas    { background: #11141a; border-radius: 4px; }
   object-fit: contain;
 }
 
-/* 仅主流：primary 全屏，secondary 隐藏 */
+/* 仅主流：primary 全屏，secondary 隐藏
+   选择器同时匹配回放页 (#vid-*) 和直播页 (#live-*) 的 video ID */
 .play-stage.layout-main-only #vid-secondary,
-.play-stage.layout-aux-only  #vid-secondary {
+.play-stage.layout-main-only #live-secondary,
+.play-stage.layout-aux-only  #vid-secondary,
+.play-stage.layout-aux-only  #live-secondary {
   display: none;
 }
 .play-stage.layout-main-only #vid-primary,
-.play-stage.layout-aux-only  #vid-primary {
+.play-stage.layout-main-only #live-primary,
+.play-stage.layout-aux-only  #vid-primary,
+.play-stage.layout-aux-only  #live-primary {
   position: absolute;
   inset: 0;
 }
 
 /* 画中画：primary 全屏，secondary 右下角小窗 30% */
-.play-stage.layout-pip #vid-primary {
+.play-stage.layout-pip #vid-primary,
+.play-stage.layout-pip #live-primary {
   position: absolute;
   inset: 0;
 }
-.play-stage.layout-pip #vid-secondary {
+.play-stage.layout-pip #vid-secondary,
+.play-stage.layout-pip #live-secondary {
   position: absolute;
   right: 16px;
   bottom: 16px;
@@ -247,7 +254,9 @@ canvas    { background: #11141a; border-radius: 4px; }
   background: #000;
 }
 .play-stage.layout-split #vid-primary,
-.play-stage.layout-split #vid-secondary {
+.play-stage.layout-split #live-primary,
+.play-stage.layout-split #vid-secondary,
+.play-stage.layout-split #live-secondary {
   position: relative;
   width: 50%;
   height: 100%;
