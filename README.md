@@ -71,8 +71,9 @@ recorder-asr-bridge.service     # SRS audio → sherpa → transcript.jsonl
 | 文档 | 用途 |
 |---|---|
 | [docs/deployment.md](docs/deployment.md) | **部署指南 + 端口 + 防火墙 + 安全** ⭐ |
+| [docs/services.md](docs/services.md) | **服务清单 / 端口 / 接口规划（按 4 个服务整理）** ⭐ |
 | [docs/architecture.md](docs/architecture.md) | 详细架构 / 组件 / 数据流 / 关键设计决策 |
-| [docs/api.md](docs/api.md) | HTTP / TCP / WebSocket 接口完整文档 |
+| [docs/api.md](docs/api.md) | HTTP / TCP / WebSocket 协议字节级文档 |
 | [docs/development.md](docs/development.md) | 本地开发环境 / 编译 / 测试 |
 | [docs/operations.md](docs/operations.md) | 日志 / 备份 / 故障排查 / 升级流程 |
 | [docs/late-join-h239-fix.md](docs/late-join-h239-fix.md) | 历史：H.239 晚入会修复（v2.0） |
