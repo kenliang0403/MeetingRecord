@@ -148,10 +148,17 @@ client = RecorderClient(host="127.0.0.1", port=9001)
 # --- Helpers ----------------------------------------------------------
 
 def srs_base_url() -> str:
-    """浏览器侧拉 HLS 用的 base URL。SRS_HOST 为空则取 request.host 的主机部分。"""
-    host = SRS_HOST
-    if not host:
-        host = request.host.split(":")[0]
+    """浏览器侧拉 HLS 用的 base URL。
+    - HTTPS（经反代访问）：返回同源 `<scheme>://<host>/srs`，让浏览器走
+      nginx 443 → `location /srs/` → 127.0.0.1:8080。**避免 mixed-content**
+      （https 页面不能直接拉 http://host:8080 的 HLS，会被浏览器拦）。
+      需 nginx 配： location /srs/ { proxy_pass http://127.0.0.1:8080/; }
+    - HTTP（未上反代的内网/开发）：直连 SRS host:port（旧行为）。
+    is_secure 经 ProxyFix 读 X-Forwarded-Proto，反代后能正确判断。
+    """
+    if request.is_secure:
+        return f"{request.scheme}://{request.host}/srs"
+    host = SRS_HOST or request.host.split(":")[0]
     return f"http://{host}:{SRS_PORT}"
 
 

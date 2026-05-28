@@ -81,16 +81,18 @@ server {
         proxy_set_header Host $host;
         proxy_cache_valid 200 1h;
     }
-}
 
-# ── 可选：把 SRS HLS 8080 也反代到 443/live/ ──────────────────────────
-# 如果想让浏览器直接走 https://recorder.example.com/srs/live/.. 拉 HLS（不暴露 SRS 8080），
-# 取消下面注释：
-#
-# location ^~ /srs/ {
-#     proxy_pass http://127.0.0.1:8080/;       # 注意末尾的 /
-#     proxy_set_header Host $host;
-#     proxy_buffering off;
-# }
-# 并在 recorder-web.service 加 Environment="SRS_PORT=443" + 在浏览器 JS 里把 srs_base
-# 改成 "https://" + host + "/srs"。详见 web/app.py::srs_base_url()。
+    # ── SRS HLS 直播反代（避免 mixed-content）─────────────────────────
+    # https 管理页不能直接拉 http://host:8080 的 HLS（浏览器拦 mixed-content）。
+    # 把 SRS 8080 反代到同源 /srs/，app.py::srs_base_url() 在 HTTPS 下会自动
+    # 生成 https://<host>/srs，前端 hls.js 拉 /srs/live/<stream>.m3u8。
+    # proxy_pass 末尾的 / 把 /srs 前缀剥掉：/srs/live/x.m3u8 → 8080/live/x.m3u8。
+    location /srs/ {
+        proxy_pass http://127.0.0.1:8080/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_buffering off;            # HLS m3u8/ts 实时分片，关 buffer
+        proxy_cache off;
+        add_header Access-Control-Allow-Origin * always;   # hls.js（同源其实够，保险）
+    }
+}
