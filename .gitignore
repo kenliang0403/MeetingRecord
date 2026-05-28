@@ -9,6 +9,10 @@ bin/
 *.exe
 *.pdb
 
+# Python 字节码
+__pycache__/
+*.pyc
+
 # 运行产生的日志和媒体文件
 logs/
 recordings/
@@ -28,7 +32,9 @@ Thumbs.db
 .env
 
 # 内部部署脚本（含具体服务器信息 / 私人开发机路径，不公开）
-部署102服务器/
+# 注意：目录名必须是 ASCII —— 中文路径会让 Windows OpenSSH 的
+# SSH_ASKPASS 子进程 spawn 失败（CreateProcessW error:2）。
+deploy-private/
 
 # Claude / 临时
 .claude/

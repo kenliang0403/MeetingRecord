@@ -167,7 +167,8 @@
     btn.textContent = '生成中…';
     statusEl.textContent = '调 LLM 中，请耐心等待（30-90 秒）...';
     try {
-      const r = await fetch(`/recordings/${encodeURIComponent(meetingDir)}/summary`, { method: 'POST' });
+      const r = await fetch(`/recordings/${encodeURIComponent(meetingDir)}/summary`,
+                            { method: 'POST', headers: window.csrfHeaders() });
       const j = await r.json();
       if (j && j.ok) {
         out.textContent = j.text || '';
@@ -224,7 +225,8 @@
     rBtn.textContent = '优化中…';
     rStatus.textContent = '调 LLM 中（30-90 秒）...';
     try {
-      const r = await fetch(`/recordings/${encodeURIComponent(meetingDir)}/transcript/refine`, { method: 'POST' });
+      const r = await fetch(`/recordings/${encodeURIComponent(meetingDir)}/transcript/refine`,
+                            { method: 'POST', headers: window.csrfHeaders() });
       const j = await r.json();
       if (j && j.ok) {
         rStatus.textContent = `已完成：${j.lines_changed}/${j.lines_total} 句被修订（模型 ${j.model}）`;

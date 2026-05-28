@@ -1,2 +1,4 @@
 Flask>=2.0
 gunicorn>=20.0
+Flask-WTF>=1.1        # CSRF 防护：/login / /config/* / /api/control / refine / summary
+Flask-Limiter>=3.5    # 登录限流（5/min/IP），防暴力破解

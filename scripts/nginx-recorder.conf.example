@@ -1,0 +1,96 @@
+# nginx 反代示例 — 用 HTTPS 终结后反代到 recorder-web (127.0.0.1:8088)
+#
+# 用法：
+#   1. 修改 server_name 为你的域名（或内网 host）。
+#   2. 填 ssl_certificate / ssl_certificate_key 路径。
+#      Let's Encrypt: /etc/letsencrypt/live/<domain>/{fullchain,privkey}.pem
+#      内部 CA / 自签：用 openssl 生成后填路径。
+#   3. 把本文件 copy 到 /etc/nginx/conf.d/recorder.conf
+#      然后 `sudo nginx -t && sudo systemctl reload nginx`
+#   4. 防火墙：关 8088 对外，开 443。
+#        sudo firewall-cmd --remove-port=8088/tcp --permanent
+#        sudo firewall-cmd --add-port=443/tcp --permanent
+#        sudo firewall-cmd --reload
+#   5. 确认 recorder-web.service 是 `--bind 127.0.0.1:8088`（本仓默认）。
+
+# ── HTTP → HTTPS 强制跳转 ─────────────────────────────────────────────
+server {
+    listen 80;
+    server_name recorder.example.com;
+    return 301 https://$host$request_uri;
+}
+
+# ── HTTPS 主站 ───────────────────────────────────────────────────────
+server {
+    listen 443 ssl http2;
+    server_name recorder.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/recorder.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/recorder.example.com/privkey.pem;
+
+    # 现代 TLS：禁 1.0/1.1，启 HSTS（确认配置 OK 后再开启长 max-age）
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    add_header Strict-Transport-Security "max-age=63072000" always;
+
+    # 上传录像 / config 时大请求体
+    client_max_body_size 64M;
+
+    # ── 通用反代到 web ───────────────────────────────────────────────
+    location / {
+        proxy_pass http://127.0.0.1:8088;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+
+        # 默认 60s 太短：LLM refine / summary 走单连接 90-180s。
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+
+    # ── SSE 字幕流：关 buffer、长 keepalive ──────────────────────────
+    # SSE (Server-Sent Events) 走 GET，nginx 默认 proxy_buffering on
+    # 会把 SSE 累积成块发出，浏览器看不到实时字幕。这条必须有。
+    location = /api/transcript/stream {
+        proxy_pass http://127.0.0.1:8088;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1d;
+    }
+
+    # ── 直接 send_file 大 mp4 回放：让 Range 走通 ────────────────────
+    location ~ ^/play/ {
+        proxy_pass http://127.0.0.1:8088;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Range             $http_range;
+        proxy_set_header If-Range          $http_if_range;
+        proxy_read_timeout 600s;
+    }
+
+    # 静态资源：可加 cache header，可选
+    location /static/ {
+        proxy_pass http://127.0.0.1:8088;
+        proxy_set_header Host $host;
+        proxy_cache_valid 200 1h;
+    }
+}
+
+# ── 可选：把 SRS HLS 8080 也反代到 443/live/ ──────────────────────────
+# 如果想让浏览器直接走 https://recorder.example.com/srs/live/.. 拉 HLS（不暴露 SRS 8080），
+# 取消下面注释：
+#
+# location ^~ /srs/ {
+#     proxy_pass http://127.0.0.1:8080/;       # 注意末尾的 /
+#     proxy_set_header Host $host;
+#     proxy_buffering off;
+# }
+# 并在 recorder-web.service 加 Environment="SRS_PORT=443" + 在浏览器 JS 里把 srs_base
+# 改成 "https://" + host + "/srs"。详见 web/app.py::srs_base_url()。

@@ -462,14 +462,18 @@ heartbeat: audio_pushed=120s msgs=370 finals=8 idle=0s
 
 ## 8. 安全检查清单（基于接口暴露面）
 
-| 风险 | 当前防护 | 加固建议 |
+| 风险 | 当前防护 | 状态 |
 |---|---|---|
-| 9001 ControlServer 无鉴权 | 仅 127.0.0.1 监听 | 不要把 9001 提到 0.0.0.0；任何能登 ssh 的本机用户都能控制呼叫 |
-| 6006 sherpa 无鉴权 | 同上 | 同上 |
-| 1985 SRS API 无鉴权 | 同上 | 同上 |
-| 8088 Web HTTP 明文 | session cookie HttpOnly | **必须**反代 HTTPS 后才对外 |
-| 1720 H.323 公开 | 协议本身 | 防火墙限制源 IP 为 GK + MCU 网段 |
+| 9001 ControlServer 无鉴权 | 仅 127.0.0.1 监听 | ✅ 默认 |
+| 6006 sherpa 无鉴权 | 仅 127.0.0.1 监听 | ✅ 默认 |
+| 1985 SRS API 无鉴权 | 仅 127.0.0.1 监听 | ✅ 默认 |
+| 8088 Web HTTP 明文 | `recorder-web.service` 默认绑 127.0.0.1 + `SESSION_COOKIE_SECURE=1` + 提供 [nginx 反代模板](../scripts/nginx-recorder.conf.example) + ProxyFix middleware | ✅ v3.2 |
+| CSRF（跨站请求伪造） | Flask-WTF `CSRFProtect`：所有 POST 强制带 `csrf_token` / `X-CSRFToken` header | ✅ v3.2 |
+| 登录暴力破解 | Flask-Limiter：`/login` POST 5/min/IP，超限 429 | ✅ v3.2 |
+| 操作可追溯 | 审计日志 `AUDIT user=... ip=... action=...`：login_success/fail、logout、config_save、recorder_restart、control、transcript_refine、summary_generate；`journalctl -u recorder-web \| grep AUDIT` 查 | ✅ v3.2 |
+| 1720 H.323 公开 | 协议本身（H.225 RAS / Q.931 没鉴权设计） | 防火墙限制源 IP 为 GK + MCU 网段（详 deployment.md） |
 | 1935 RTMP 公开 | — | 建议防火墙只允许本机 + 内网 |
 | LLM API Key 泄漏 | `config.json` chmod 0600 | 单独的 secrets 管理（如环境变量、Vault） |
+| 角色区分（admin/operator/viewer） | 未实现 — 所有登录用户权限相同 | TODO（参考 deployment.md §安全） |
 
-完整防火墙模板 → [deployment.md §安全](deployment.md)。
+完整防火墙模板 + HTTPS 反代步骤 → [deployment.md §安全](deployment.md)。

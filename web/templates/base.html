@@ -3,8 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf-token" content="{{ csrf_token() }}">
 <title>{% block title %}Recorder Admin{% endblock %}</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script>
+  // 全局 helper：JS fetch POST/PUT/DELETE 调用统一从 meta 读 CSRF token。
+  // 用法：fetch(url, { method:'POST', headers: window.csrfHeaders(), body: ... })
+  //      JSON body 时：headers: { ...window.csrfHeaders(), 'Content-Type': 'application/json' }
+  window.csrfToken = () => {
+    const m = document.querySelector('meta[name="csrf-token"]');
+    return m ? m.getAttribute('content') : '';
+  };
+  window.csrfHeaders = () => ({ 'X-CSRFToken': window.csrfToken() });
+</script>
 {% block head %}{% endblock %}
 </head>
 <body>

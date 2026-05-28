@@ -4,6 +4,7 @@
 <div class="login-box">
   <h1>Recorder 管理</h1>
   <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label>用户名 <input name="username" autofocus required></label>
     <label>密码 <input name="password" type="password" required></label>
     <button type="submit">登录</button>

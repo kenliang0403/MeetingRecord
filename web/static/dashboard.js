@@ -88,7 +88,7 @@
       try {
         const r = await fetch(`/api/control/${cmd}`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...window.csrfHeaders() },
           body: '{}',
         });
         const j = await r.json();

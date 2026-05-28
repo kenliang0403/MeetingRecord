@@ -316,62 +316,86 @@ ssh <user>@<recorder_host> "sudo systemctl restart recorder-asr"
 | 风险 | 缓解措施 |
 |---|---|
 | **LLM API Key 明文存 config.json** | `chmod 0600 /opt/recorder/config/config.json`；运维独占读 |
-| **Web 弱密码** | `setup_user.py` 强制密码长度；考虑接 LDAP/SSO（未实现）|
-| **会议数据出境** | LLM 调用走 DeepSeek（中国境内 API），但本地数据仍发出。**敏感会议禁用 refine/summary**（不点按钮即可） |
+| **Web 弱密码** | `setup_user.py` 强制密码长度 + **5/分钟登录限流**（v3.2 Flask-Limiter，IP 维度）；考虑接 LDAP/SSO（未实现）|
+| **CSRF（跨站请求伪造）** | v3.2 Flask-WTF CSRFProtect：所有 POST 校验 `csrf_token` / `X-CSRFToken` header，浏览器恶意页面无法构造跨站操作 |
+| **HTTP 明文传 session cookie** | v3.2 默认：`recorder-web.service` 绑 `127.0.0.1:8088` + `SESSION_COOKIE_SECURE=1` + 提供 [nginx 反代模板](../scripts/nginx-recorder.conf.example)（见下方）|
+| **操作不可追溯** | v3.2 审计日志：`AUDIT user=… ip=… action=…` 覆盖 login/logout/config_save/recorder_restart/control/refine/summary；用 `journalctl -u recorder-web \| grep AUDIT` 查 |
+| **会议数据出境** | LLM 调用走外部 API（如 DeepSeek 中国境内 API），但本地数据仍发出。**敏感会议禁用 refine/summary**（不点按钮即可） |
 | **录像目录无加密** | 文件系统层级加密（如 LUKS）+ 限制 ftadmin 之外用户读 `/opt/recorder/recordings/` |
 | **SRS 1985 API 无鉴权** | 仅 127.0.0.1 绑定（防火墙阻外网） |
-| **9001 ControlServer 无鉴权** | 仅 127.0.0.1 绑定 |
+| **9001 ControlServer 无鉴权** | 仅 127.0.0.1 绑定（任何能登本机 ssh 的用户都能控制呼叫 — 控制系统级权限边界） |
 | **session cookie 30min idle 自动登出** | 已实现（`SESSION_TIMEOUT_MIN=30`） |
-| **HTTP 明文** | 强烈建议加 nginx 反代 + Let's Encrypt 证书（见下方） |
+| **角色区分缺失** | 当前所有登录用户权限相同（可读 + 改配置 + 控通话）。TODO：admin/operator/viewer 三级 |
 | **sudoers drop-in 锁死 sudo** | 5/8 踩坑后已彻底废弃，**改用 systemd path-unit + 触发文件**，web 进程 0 sudo 权限 |
 | **bridge 用 root socket?** | 否，bridge 是 ftadmin 跑，不需要任何特权 |
 
-### HTTPS 反代（生产推荐）
+### HTTPS 反代（生产**必须**）
 
-```nginx
-# /etc/nginx/conf.d/recorder.conf
-server {
-    listen 443 ssl http2;
-    server_name recorder.example.com;
+裸 HTTP 8088 会让 session cookie 在网络上明文传输，等价于绕过登录。生产部署的标准流程：
 
-    ssl_certificate     /etc/letsencrypt/live/recorder.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/recorder.example.com/privkey.pem;
-    ssl_protocols       TLSv1.2 TLSv1.3;
+#### 1. recorder-web 绑 127.0.0.1（仓库默认已配置）
 
-    # Flask 主接口
-    location / {
-        proxy_pass http://127.0.0.1:8088;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_read_timeout 300s;   # LLM 调用可能超 30s
-    }
+`web/recorder-web.service` 的 ExecStart 应为 `--bind 127.0.0.1:8088 --forwarded-allow-ips 127.0.0.1`（v3.1+ 默认）。这样 8088 不再对外，外部访问必须走反代。
 
-    # SSE 字幕流（要禁 buffer）
-    location /api/transcript/stream {
-        proxy_pass http://127.0.0.1:8088;
-        proxy_set_header Connection "";
-        proxy_http_version 1.1;
-        proxy_buffering off;
-        proxy_cache off;
-        chunked_transfer_encoding off;
-    }
+如果用旧版改过 `0.0.0.0:8088` → 改回 `127.0.0.1:8088` 后 `sudo systemctl daemon-reload && sudo systemctl restart recorder-web`。
 
-    # SRS HLS（如果用浏览器跨域）
-    location /live/ {
-        proxy_pass http://127.0.0.1:8080/live/;
-        # 添加 CORS（hls.js 需要）
-        add_header Access-Control-Allow-Origin *;
-    }
-}
+#### 2. 装证书
 
-server {
-    listen 80;
-    server_name recorder.example.com;
-    return 301 https://$host$request_uri;
-}
+```bash
+# Let's Encrypt（推荐，公网域名）
+sudo dnf install certbot
+sudo certbot certonly --standalone -d recorder.example.com
+
+# 或：内部 CA 签发 / 自签
+# openssl req -x509 -newkey rsa:4096 -nodes \
+#     -keyout /etc/pki/tls/private/recorder.key \
+#     -out    /etc/pki/tls/certs/recorder.crt \
+#     -days 365 -subj "/CN=recorder.example.com"
 ```
 
-加完反代后 firewall 只暴露 443，其余全 drop。
+#### 3. 反代配置
+
+完整模板在 [`scripts/nginx-recorder.conf.example`](../scripts/nginx-recorder.conf.example)，含：HTTP→HTTPS 强制跳转、SSE 关 buffer、Range header 透传、SRS HLS 反代选项。
+
+部署：
+
+```bash
+sudo cp scripts/nginx-recorder.conf.example /etc/nginx/conf.d/recorder.conf
+sudo vim /etc/nginx/conf.d/recorder.conf       # 改 server_name + 证书路径
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+#### 4. 防火墙
+
+```bash
+sudo firewall-cmd --remove-port=8088/tcp --permanent   # 8088 不再对外
+sudo firewall-cmd --add-port=443/tcp --permanent       # 开 HTTPS
+sudo firewall-cmd --add-port=80/tcp --permanent        # certbot renew 用，可选
+sudo firewall-cmd --reload
+```
+
+#### 5. 验证
+
+```bash
+curl -I https://recorder.example.com/login       # 200 + Strict-Transport-Security
+curl -I http://recorder.example.com/login        # 301 → https
+curl -I http://10.x.x.x:8088/login               # 应该 connection refused（仅本机能访问）
+```
+
+#### 6. cookie secure flag
+
+`web/app.py` 默认 `SESSION_COOKIE_SECURE=True`，cookie 仅 HTTPS 传。如果纯内网开发想临时关掉：
+
+```bash
+sudo systemctl edit recorder-web
+# 加：
+# [Service]
+# Environment="SESSION_COOKIE_SECURE=0"
+sudo systemctl restart recorder-web
+```
+
+**生产环境必须保持默认开启**。
 
 ### 备份
 

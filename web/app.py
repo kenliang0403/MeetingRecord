@@ -42,6 +42,11 @@ from flask import (
     Flask, render_template, request, redirect, url_for,
     session, flash, jsonify, send_file, abort, Response,
 )
+from werkzeug.middleware.proxy_fix import ProxyFix
+from flask_wtf.csrf import CSRFProtect, CSRFError
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+import logging
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import authenticate, login_required, AUTH_FILE, load_users  # noqa: E402
@@ -81,6 +86,61 @@ else:
 app.permanent_session_lifetime = timedelta(minutes=SESSION_TIMEOUT_MIN)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+# 仅 HTTPS 传 cookie。生产必须 True（前置 nginx/caddy 终结 TLS + 反代到 127.0.0.1:8088）。
+# 局域网 / 开发临时调试可用环境变量关掉。
+app.config["SESSION_COOKIE_SECURE"] = os.environ.get("SESSION_COOKIE_SECURE", "1") != "0"
+
+# 信任本机反代的 X-Forwarded-Proto / -For / -Host 头，让 Flask 知道客户端实际走的 HTTPS。
+# 仅 1 跳（直连本机 nginx）；如果在多层反代后面要相应增大。
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+# ── CSRF 防护 ────────────────────────────────────────────────────────
+# 所有 state-changing 请求（POST/PUT/DELETE/PATCH）都要带 csrf_token：
+#   - HTML form: <input name="csrf_token" value="{{ csrf_token() }}">
+#   - JS fetch:  headers: {'X-CSRFToken': window.csrfToken()}（base.html 注入 meta）
+# 即使 attacker 诱使已登录用户访问恶意页面构造跨站 POST，没 token 也会 400。
+# 配合 SameSite=Lax 双重保险。
+csrf = CSRFProtect(app)
+
+@app.errorhandler(CSRFError)
+def _handle_csrf_error(e):
+    # JSON 客户端更友好的错误（默认会渲染 HTML 页）
+    if request.accept_mimetypes.best_match(["application/json", "text/html"]) == "application/json":
+        return jsonify({"ok": False, "error": f"CSRF 校验失败：{e.description}"}), 400
+    return e.description, 400
+
+# ── 登录限流 ────────────────────────────────────────────────────────
+# 默认 5/分钟/IP，防字典暴力破解。同 IP 第 6 次密码错误 → 429。
+# in-memory storage 单 worker OK；gunicorn 2 worker 时每个 worker 独立计数，
+# 实际等效 ~10/min/IP — 仍远低于暴力可行阈值。
+# 想全局共享：装 Redis 改 storage_uri="redis://127.0.0.1:6379"。
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    storage_uri="memory://",
+    default_limits=[],          # 不全局限流，只对 /login 等关键 endpoint 显式加
+)
+
+# ── 审计日志 ─────────────────────────────────────────────────────────
+# 所有"会改变服务器状态"的请求都打一条 AUDIT 行。journalctl -u recorder-web | grep AUDIT
+# 可追踪谁在什么时候做了什么。
+_audit_log = logging.getLogger("recorder-web.audit")
+_audit_log.setLevel(logging.INFO)
+if not _audit_log.handlers:
+    _h = logging.StreamHandler()    # stdout → systemd journal
+    _h.setFormatter(logging.Formatter(
+        "AUDIT %(asctime)s user=%(user)s ip=%(ip)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    ))
+    _audit_log.addHandler(_h)
+    _audit_log.propagate = False
+
+def _audit(action: str, **extra):
+    """记录一条审计日志。extra 任意 k=v 都拼到 message 末尾。"""
+    user = session.get("user", "-") if session else "-"
+    ip   = request.remote_addr or "-"
+    parts = [f"action={action}"] + [f"{k}={v}" for k, v in extra.items()]
+    _audit_log.info(" ".join(parts), extra={"user": user, "ip": ip})
 
 client = RecorderClient(host="127.0.0.1", port=9001)
 
@@ -98,6 +158,8 @@ def srs_base_url() -> str:
 # --- Auth routes ------------------------------------------------------
 
 @app.route("/login", methods=["GET", "POST"])
+@limiter.limit("5 per minute", methods=["POST"],
+               error_message="登录尝试过于频繁，请稍后再试。")
 def login():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
@@ -106,14 +168,18 @@ def login():
             session.clear()
             session.permanent = True
             session["user"] = username
+            _audit("login_success", username=username)
             nxt = request.args.get("next") or url_for("dashboard")
             return redirect(nxt)
+        _audit("login_fail", username=username or "(empty)")
         flash("用户名或密码错误", "error")
     return render_template("login.html")
 
 
 @app.route("/logout")
 def logout():
+    if session.get("user"):
+        _audit("logout")
     session.clear()
     flash("已登出", "info")
     return redirect(url_for("login"))
@@ -329,6 +395,7 @@ def config_save():
         flash(f"写文件失败：{e}", "error")
         return redirect(url_for("config_page"))
 
+    _audit("config_save", path=CONFIG_PATH, mode="fields")
     flash("配置已保存。改动需重启 recorder-core 才生效（点下方按钮）", "info")
     return redirect(url_for("config_page"))
 
@@ -356,6 +423,7 @@ def config_save_advanced():
     except OSError as e:
         flash(f"写文件失败：{e}", "error")
         return redirect(url_for("config_page"))
+    _audit("config_save", path=CONFIG_PATH, mode="advanced", bytes=len(text))
     flash("高级模式：完整 JSON 已保存。改动需重启 recorder-core", "info")
     return redirect(url_for("config_page"))
 
@@ -373,8 +441,10 @@ def config_restart():
     try:
         RESTART_FLAG.parent.mkdir(parents=True, exist_ok=True)
         RESTART_FLAG.write_text(datetime.now().isoformat(timespec="seconds"))
+        _audit("recorder_restart_requested", unit=RECORDER_UNIT)
         flash(f"已请求重启 {RECORDER_UNIT}（约 2-3 秒后完成）", "info")
     except OSError as e:
+        _audit("recorder_restart_failed", error=str(e))
         flash(f"重启请求失败：{e}", "error")
     return redirect(url_for("config_page"))
 
@@ -876,6 +946,8 @@ def refine_meeting_transcript(meeting_dir):
         1 for d, new_text in zip(finals, refined)
         if str(new_text or "").strip() != d["text"].strip()
     )
+    _audit("transcript_refine", meeting=meeting_dir, model=model,
+           lines=len(finals), changed=changed)
     return jsonify({
         "ok": True,
         "lines_total":   len(finals),
@@ -1073,6 +1145,8 @@ def generate_meeting_summary(meeting_dir):
     except OSError as e:
         return jsonify({"ok": False, "error": f"写 summary.md 失败：{e}"}), 500
 
+    _audit("summary_generate", meeting=meeting_dir, model=model,
+           lines=len(sentences), chars=len(text or ""))
     return jsonify({
         "ok": True,
         "text": text,
@@ -1130,8 +1204,11 @@ _CONTROL_WHITELIST = {
 @login_required
 def api_control(cmd):
     if cmd not in _CONTROL_WHITELIST:
+        _audit("control_rejected", cmd=cmd, reason="not_in_whitelist")
         return jsonify({"ok": False, "error": "command not allowed"}), 400
-    return jsonify(client.call(cmd))
+    result = client.call(cmd)
+    _audit("control", cmd=cmd, ok=bool(result.get("ok")))
+    return jsonify(result)
 
 
 @app.route("/healthz")
