@@ -111,40 +111,155 @@ Session cookie 配置：30 分钟 idle 自动登出，HttpOnly + SameSite=Lax。
 
 ## 2. recorder-core ControlServer（TCP :9001）
 
-**仅 127.0.0.1 监听**，无鉴权。所有命令都是单行 JSON + `\n`。
+**仅 127.0.0.1 监听**，无鉴权 — 任何能登本机 ssh 的用户都能操作通话。源码：`src/tcp/ControlServer.cpp` + `src/main.cpp` 各 `registerHandler(...)` 块。
 
-### 协议
+### 2.1 协议
 
 ```
-client → server:  {"cmd":"<command>","key":"value",...}\n
-server → client:  {"ok":true,"data":{...}}\n     # 成功
-                  {"ok":false,"error":"..."}\n   # 失败
+client → server:  {"cmd":"<command>","<arg>":"<value>",...}\n
+server → client:  {"ok":true, "data":{...}}\n           # 成功带数据
+                  {"ok":true, "message":"..."}\n        # 成功仅消息
+                  {"ok":true, "token":"..."}\n          # dial 返回 call token
+                  {"ok":false,"error":"..."}\n          # 失败
 ```
 
-### 命令列表
+每个 cmd 一行 JSON，`\n` 终止。连接可复用（长连接），也可一次性 close。
 
-| cmd | 参数 | 说明 |
+**关键：必须发 JSON。** 早期 bridge 用 `b"status\n"` 被当 invalid 返回 `{"ok":false}`，silent 失败（commit `4576d4d`）。
+
+### 2.2 命令清单（共 15 个）
+
+按用途分组。
+
+#### 只读 / 查询类
+
+| cmd | 参数 | 返回 data 字段 | 说明 |
+|---|---|---|---|
+| `status` | — | 见 [2.3](#23-status-完整返回字段) | 完整运行状态（dashboard / bridge 查 meeting_id 都用这个） |
+| `audio_levels` | — | `peak_dbfs`, `rms_dbfs`, `age_ms` | 瞬时电平（dBFS [-120, 0]）；`age_ms > 500` 表示无音频；VU 表 ~10Hz 拉取 |
+| `config` | — | 见 [2.4](#24-config-返回字段) | 当前运行配置（密码字段返回 `"***"`） |
+| `recordings` | — | `output_dir`, `total_files`, `recording_now`, `aux_recording`, `files[]` | **仅扫 output_dir 顶层 .mp4**，不递归进 `<meeting_id>/` 子目录；files 按 mtime 倒序 |
+| `version` | — | `name`, `version`, `config` | 当前 binary 版本（硬编 `"3.1.0"`）+ 配置路径 |
+
+#### 通话控制类
+
+| cmd | 参数 | 行为 | 失败条件 |
+|---|---|---|---|
+| `dial` | `number` (**必填**), `host` (可选 — MCU 直连，绕过 GK 路由) | `endpoint.dialTo(number, host)`；返回 `{ok:true, token:"<call-token>"}` | `number` 空 → `"number is required"`；MakeCall 失败 → `"MakeCall failed — check GK registration and number"` |
+| `clear_call` | `token` (可选) | 有 token：`ClearCall(token, EndedByLocalUser)`；无 token：`ClearAllCalls(...)` | — |
+| `start_main_video` | — | 手动启主流屏保发送（外呼时已自动启）；调 `endpoint.startMainVideo()` | 不在通话中 → `"not in call"` |
+| `stop_main_video` | — | 停主流发送 | — |
+| `start_presentation` | — | H.239 主动演示：presentationTokenRequest → grant → OLC session=10 + AuxStream VideoSender | 不在通话中 → `"not in call"` |
+| `stop_presentation` | — | CLC session=10 + presentationTokenRelease + 停 AuxStream | — |
+
+> ⚠️ **没有 `hangup` 命令**。要挂断用 `clear_call`（无参数 = 挂断当前所有 call）。
+
+#### 配置 / 维护类
+
+| cmd | 参数 | 行为 |
 |---|---|---|
-| `status` | (无) | 返回完整运行状态（in_call / main_file / meeting_id / gk_registered / video / audio / streaming / ...） |
-| `dial` | `number`(必填), `host`(可选 = MCU 直连绕开 GK) | 主动呼出 |
-| `hangup` | (无) | 挂断当前通话 |
-| `clear_call` | (无) | 强制清除 call_token（hangup 前未释放时备用）|
-| `start_video` | (无) | 开始向 MCU 发主视频（默认 ScreenSaver 测试图）|
-| `stop_video` | (无) | 停止 |
-| `start_presentation` | (无) | 触发 H.239 主动演示（presentationTokenRequest → grant → OLC）|
-| `stop_presentation` | (无) | CLC session=10 + presentationTokenRelease |
-| `audio_levels` | (无) | 实时 RMS + Peak dBFS（dashboard VU 用） |
-| `config` | (无) | 返回当前运行配置 |
-| `faststart_one` | `path` | 对某个 mp4 跑 faststart 重写（路径必须在 `output_dir` 内） |
-| `faststart_all` | (无) | 后台扫整库做 faststart |
+| `reload` | — | 重读 `config.json`；GK 字段变了返回带 `warning` 提示需 restart |
+| `set` | `key` (必), `value` (必) | 修改单个运行时配置（dot-notation key，见 [2.5](#25-set-支持的-key)）；**不写回 config.json**，只改进程内存 |
+| `faststart_one` | `path` (必) | 同步重写一个 mp4 为 +faststart；路径必须以 `recorder.output_dir` 开头且不含 `..` |
+| `faststart_all` | — | 后台 detached thread 扫整库（递归），仅处理 `main_*.mp4` / `aux_*.mp4`；立即返回，进度看 journal |
 
-### Python 客户端示例
+### 2.3 status 完整返回字段
+
+```json
+{
+  "ok": true,
+  "data": {
+    // ─ 静态配置（来自 config.json，进程启动时加载）─
+    "alias":      "<your-alias>",         // GK alias
+    "gk_host":    "<gk-host>",
+    "gk_port":    1719,
+    "e164":       "<your-alias>",          // 通常 == alias（web 保存时自动同步）
+    "output_dir": "/opt/recorder/recordings",
+
+    // ─ 运行时（任何时候都返回）─
+    "gk_registered":   true,                // RAS RRQ 是否已 ACK
+    "in_call":         true,
+    "call_token":      "OpalCon_xxx_xxx",   // 当前 call PTrace token；无通话 = ""
+    "reconnect_count": 0,                   // outgoing 模式被重连次数
+
+    // ─ 通话中字段（无通话时这些都是空/false/0）─
+    "meeting_name":     "MCU/RemoteName",   // H.245 TerminalLabel 解析
+    "caller_id":        "820715",           // 远端拨号号或 alias
+    "recording":        true,               // FfmpegRecorder 是否在写
+    "main_file":        "/opt/.../main_03.mp4",
+    "main_sending":     true,               // 本端是否在发主视频
+    "h239_received":    false,              // 远端是否在 H.239 演示
+    "has_presentation": false,              // 本端是否在演示（H.239 主动）
+    "aux_recording":    false,
+    "aux_file":         "/opt/.../aux_02.mp4",
+    "meeting_id":       "20260526_820715",  // meeting 目录名（bridge 用这个写 per-meeting jsonl）
+    "meeting_dir":      "/opt/recorder/recordings/20260526_820715",
+    "connection_idx":   4                   // 同一 meeting 内的连接序号（断开重连 +1）
+  }
+}
+```
+
+### 2.4 config 返回字段
+
+```json
+{
+  "ok": true,
+  "data": {
+    "gk":        { "host", "port", "alias", "e164", "ttl", "username", "password" },   // password 永远 "***"
+    "recorder":  { "output_dir", "video_width", "video_height", "video_fps",
+                   "audio_sample_rate", "audio_channels",
+                   "video_codec", "audio_codec",
+                   "video_bitrate", "audio_bitrate", "audio_gain",
+                   "rtp_port_base" },
+    "streaming": { "enabled", "rtmp_server", "main_key_tpl", "aux_key_tpl", "push_aux" },
+    "outgoing":  { "enabled", "dial_number", "mcu_host",
+                   "reconnect", "reconnect_delay_s", "max_reconnects" },
+    "tcp":       { "bind_addr", "port" },
+    "auto_send_video": true,
+    "log_dir":   "/var/log/recorder",
+    "log_level": "info"
+  }
+}
+```
+
+字段含义详见 `src/config/AppConfig.h`。
+
+### 2.5 set 支持的 key
+
+dot-notation，**仅改进程内存（不写回 config.json）**：
+
+| key | value 类型 | 立即生效？ |
+|---|---|---|
+| `gk.host` / `gk.port` / `gk.alias` / `gk.e164` / `gk.password` | string | ❌ 仅记录，提示 `"restart required to re-register"` |
+| `outgoing.dial_number` / `outgoing.mcu_host` | string | ✅ 下次 dial 起 |
+| `outgoing.enabled` / `outgoing.reconnect` | `"true"`/`"false"`/`"1"`/`"0"` | ✅ |
+| `log_level` | string (`"debug"`/`"info"`/...) | ✅ 立即 re-init logger |
+| `recorder.output_dir` | string | ✅ 立即 mkdir + 下次录像起 |
+| `auto_send_video` | `"true"`/`"false"`/`"1"`/`"0"` | ✅ 下次通话起 |
+
+其他 key → `"unsupported key: <key>"`。要持久化必须通过 web `/config/save`（写 config.json）然后 `reload` 或 restart。
+
+### 2.6 调用方矩阵
+
+| 调用方 | 用到的 cmd | 频率 |
+|---|---|---|
+| recorder-web `/api/status` | `status` | dashboard 轮询每 2s |
+| recorder-web `/api/levels` | `audio_levels` | VU 表 ~10Hz |
+| recorder-web `/api/control/<cmd>` | **白名单**：`start_main_video` / `stop_main_video` / `start_presentation` / `stop_presentation` | 用户点按钮 |
+| recorder-web `/config` 页 | `config` (读) | 加载页面时（写配置是直接改 config.json 文件，不走 9001） |
+| recorder-asr-bridge | `status`（只看 `meeting_id`） | **10s cache** — 避免阻塞 asyncio |
+| ctrl_query.py CLI | 全部 | 运维诊断 |
+
+### 2.7 客户端示例
+
+#### Python
 
 ```python
 import socket, json
-def send(cmd_dict):
-    s = socket.socket(); s.settimeout(5)
-    s.connect(("127.0.0.1", 9001))
+
+def call(cmd_dict, host="127.0.0.1", port=9001, timeout=5):
+    s = socket.socket(); s.settimeout(timeout)
+    s.connect((host, port))
     s.sendall((json.dumps(cmd_dict) + "\n").encode())
     buf = b""
     while b"\n" not in buf:
@@ -154,21 +269,26 @@ def send(cmd_dict):
     s.close()
     return json.loads(buf.decode())
 
-print(send({"cmd": "status"}))
-print(send({"cmd": "dial", "number": "<mcu-number>"}))
-print(send({"cmd": "start_presentation"}))
+print(call({"cmd": "status"}))
+print(call({"cmd": "version"}))
+print(call({"cmd": "dial", "number": "<mcu-number>"}))
+print(call({"cmd": "set", "key": "log_level", "value": "debug"}))
+print(call({"cmd": "faststart_one",
+            "path": "/opt/recorder/recordings/20260526_820715/main_01.mp4"}))
 ```
 
-shell 一行（netcat）：
+#### Shell (netcat)
 
 ```bash
-echo '{"cmd":"status"}'  | nc -q 1 127.0.0.1 9001
-echo '{"cmd":"dial","number":"<mcu-number>"}' | nc -q 1 127.0.0.1 9001
+echo '{"cmd":"status"}'                                | nc -q 1 127.0.0.1 9001
+echo '{"cmd":"version"}'                               | nc -q 1 127.0.0.1 9001
+echo '{"cmd":"recordings"}'                            | nc -q 1 127.0.0.1 9001
+echo '{"cmd":"dial","number":"<mcu-number>"}'          | nc -q 1 127.0.0.1 9001
+echo '{"cmd":"clear_call"}'                            | nc -q 1 127.0.0.1 9001
+echo '{"cmd":"set","key":"log_level","value":"debug"}' | nc -q 1 127.0.0.1 9001
 ```
 
-### 重要：必须发 JSON，不要发纯文本
-
-**踩坑历史**：bridge.py 早期用 `s.sendall(b"status\n")`，被 ControlServer 当成 invalid command 返回 `{"ok":false}`。务必发 JSON 格式。详见 commit `4576d4d`。
+或直接：`python3 /opt/recorder/recorder-core/scripts/ctrl_query.py status`
 
 ## 3. ASR Bridge → sherpa-onnx WebSocket（:6006）
 
