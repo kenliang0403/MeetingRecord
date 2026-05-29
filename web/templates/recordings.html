@@ -15,11 +15,12 @@
       <th>辅流</th>
       <th>大小</th>
       <th>目录</th>
+      <th>操作</th>
     </tr>
   </thead>
   <tbody>
     {% for r in items %}
-    <tr>
+    <tr data-dir="{{ r.dir_name }}">
       <td><a href="{{ url_for('meeting_page', meeting_dir=r.dir_name) }}">{{ r.meeting_id }}</a></td>
       <td>{{ r.meeting_name or '—' }}</td>
       <td>{{ r.first_start_ts or '—' }}</td>
@@ -27,6 +28,8 @@
       <td class="num">{{ r.aux_count }}</td>
       <td class="num">{{ r.total_size_mb }} MB</td>
       <td class="muted">{{ r.dir_name }}</td>
+      <td><button type="button" class="btn-del" data-dir="{{ r.dir_name }}"
+                  data-name="{{ r.meeting_id }}">删除</button></td>
     </tr>
     {% endfor %}
   </tbody>
@@ -34,4 +37,30 @@
 {% else %}
 <p class="muted">尚未有录像。一旦有会议入会并产生 mp4 文件，会自动出现在这里。</p>
 {% endif %}
+
+<script>
+  document.querySelectorAll('.btn-del').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var dir  = btn.getAttribute('data-dir');
+      var name = btn.getAttribute('data-name') || dir;
+      if (!confirm('确定永久删除会议「' + name + '」？\n该目录下的录像、字幕、纪要将全部删除，不可恢复。')) return;
+      btn.disabled = true; btn.textContent = '删除中…';
+      fetch('/recordings/' + encodeURIComponent(dir) + '/delete', {
+        method: 'POST',
+        headers: window.csrfHeaders(),
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        if (d.ok) {
+          var row = btn.closest('tr');
+          if (row) row.remove();
+        } else {
+          alert('删除失败：' + (d.error || '未知错误'));
+          btn.disabled = false; btn.textContent = '删除';
+        }
+      }).catch(function (e) {
+        alert('请求失败：' + e);
+        btn.disabled = false; btn.textContent = '删除';
+      });
+    });
+  });
+</script>
 {% endblock %}

@@ -237,7 +237,40 @@ tshark -r /tmp/cap.pcap -V | grep -E "registrationRequest|registrationConfirm"
 
 ## 5. 磁盘空间管理
 
-录像目录涨得快（每小时会议 ~1.5 GB main + 几十 MB aux）。**保留策略由运维定**，例如保留 14 天：
+录像目录涨得快（每小时会议 ~1.5 GB main + 几十 MB aux）。
+
+### 5.0 自动清理（推荐）— recorder-cleanup.timer
+
+内置定时清理，由 `recorder-cleanup.timer` 每天 03:00 触发，执行 `scripts/cleanup_recordings.py`。行为由 `config.json` 的 `cleanup` 节控制：
+
+```json
+"cleanup": { "enabled": false, "retention_days": 180 }
+```
+
+- `enabled` 默认 **false**（自动删除是破坏性操作，需显式开启）。可在 Web `/config` 页勾选「启用自动清理」+ 填保留天数。
+- 删除规则（安全优先）：
+  - 只删 `output_dir` 下**目录名以 YYYYMMDD 开头**的会议目录（如 `20260526_820715`），其他目录一律不动。
+  - 按**目录名里的日期**判断超期，不用 mtime（mtime 会被 faststart/rsync 刷新导致误判）。
+  - **跳过正在录制的会议**（脚本查 TCP 9001 `status` 的 `meeting_id`）。
+
+手动操作：
+```bash
+PY=/usr/bin/python3
+SCR=/opt/recorder/recorder-core/scripts/cleanup_recordings.py
+
+$PY $SCR --dry-run     # 预览将删哪些（不受 enabled 限制，不真删）
+$PY $SCR --force       # 忽略 enabled=false，立即执行一次
+$PY $SCR               # 正常执行（enabled=false 时跳过）
+
+systemctl list-timers recorder-cleanup.timer    # 看下次触发时间
+journalctl -u recorder-cleanup.service           # 看上次清理日志
+```
+
+回放页也提供**手动单个删除**：`/recordings` 列表每行「删除」按钮 + 回放页「删除此会议」按钮（二次确认，调 `POST /recordings/<m>/delete`，正在录制的会议会被拒绝）。
+
+### 5.1 手动批量清理（一次性 / 自定义策略）
+
+不用 timer 时也可手动批量删，例如保留 14 天：
 
 ```bash
 # Dry-run：列出 14 天前的会议

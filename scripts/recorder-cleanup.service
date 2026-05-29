@@ -1,0 +1,13 @@
+[Unit]
+Description=Recorder recordings cleanup (retention policy)
+Documentation=https://github.com/kenliang0403/MeetingRecord
+After=recorder-core.service
+
+[Service]
+Type=oneshot
+# 运行用户：与其它 recorder 服务一致（部署脚本会按 RECORDER_USER 替换）
+User=ftadmin
+Nice=10
+IOSchedulingClass=idle
+ExecStart=/usr/bin/python3 /opt/recorder/recorder-core/scripts/cleanup_recordings.py
+# 行为由 /opt/recorder/config/config.json 的 cleanup 节控制（enabled / retention_days）

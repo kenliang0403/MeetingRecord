@@ -31,6 +31,7 @@ API (login required):
 """
 import json
 import os
+import shutil
 import sys
 import time
 import urllib.error
@@ -258,6 +259,11 @@ EDITABLE_FIELDS = [
     ("llm_base_url", "Base URL",   "text",     ("llm", "base_url"), "例如 https://api.deepseek.com（OpenAI 兼容协议）"),
     ("llm_api_key",  "API Key",    "password", ("llm", "api_key"),  "留空保留原值；输入新值覆盖"),
     ("llm_model",    "模型名",     "text",     ("llm", "model"),    "例如 deepseek-chat"),
+
+    # ── 录像自动清理 ─────────────────────────────────────────────
+    ("__group_cleanup", "录像自动清理（定时删除旧会议，防磁盘满）", None, None, None),
+    ("cleanup_enabled",        "启用自动清理", "checkbox", ("cleanup", "enabled"),        "每天 03:00 由 recorder-cleanup.timer 执行；默认关闭"),
+    ("cleanup_retention_days", "保留天数",     "int",      ("cleanup", "retention_days"), "超过此天数的会议目录将被永久删除（按目录名日期判断）。例如 180"),
 
     # ── 杂项 ────────────────────────────────────────────────────
     ("__group_misc", "其它", None, None, None),
@@ -644,6 +650,57 @@ def meeting_page(meeting_dir):
         meeting_t0_ms=t0,
         meeting_json=meeting_json,
     )
+
+
+def _safe_meeting_dir(meeting_dir):
+    """把 meeting_dir 解析成绝对路径并校验它确实在 RECORDINGS_DIR 内。
+    返回 (target_path, None) 或 (None, error_message)。防目录穿越。
+    """
+    base = Path(RECORDINGS_DIR).resolve()
+    target = (base / meeting_dir).resolve()
+    # 必须是 base 的真子目录（不能等于 base 本身，也不能跳出去）
+    if target == base or base not in target.parents:
+        return None, "非法路径"
+    if not target.is_dir():
+        return None, "会议目录不存在"
+    return target, None
+
+
+@app.route("/recordings/<meeting_dir>/delete", methods=["POST"])
+@login_required
+def delete_meeting(meeting_dir):
+    """删除整个会议目录（mp4 + meeting.json + 字幕 + 纪要）。不可恢复。
+    安全：路径校验 + 拒绝删除正在录制的会议。
+    """
+    target, err = _safe_meeting_dir(meeting_dir)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+
+    # 拒绝删除正在录制的会议：问 recorder-core 当前 meeting_id
+    try:
+        st = client.call("status")
+        if st.get("ok"):
+            cur = (st.get("data") or {}).get("meeting_id") or ""
+            if cur and cur == target.name:
+                return jsonify({"ok": False,
+                                "error": "该会议正在录制中，不能删除"}), 409
+    except Exception:
+        pass  # recorder-core 不可达时不阻塞删除历史会议
+
+    try:
+        size_mb = round(sum(f.stat().st_size for f in target.rglob("*") if f.is_file())
+                        / (1024 * 1024), 1)
+    except Exception:
+        size_mb = "?"
+
+    try:
+        shutil.rmtree(target)
+    except Exception as e:
+        _audit("delete_meeting_failed", meeting=target.name, error=str(e))
+        return jsonify({"ok": False, "error": f"删除失败：{e}"}), 500
+
+    _audit("delete_meeting", meeting=target.name, size_mb=size_mb)
+    return jsonify({"ok": True, "meeting": target.name, "size_mb": size_mb})
 
 
 def _read_meeting_t0_ms(target_dir):

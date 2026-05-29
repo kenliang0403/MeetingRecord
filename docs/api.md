@@ -42,6 +42,7 @@ Session cookie 配置：30 分钟 idle 自动登出，HttpOnly + SameSite=Lax。
 | **POST** | `/recordings/<m>/transcript/refine` | **LLM 保守纠错**：读 transcript.jsonl 全部 finals → 分批（默认 50 句/批）调 LLM → 写 `transcript.refined.jsonl`。原始 `transcript.jsonl` 永不修改。返回 `{ok, lines_total, lines_changed, model}` |
 | GET | `/recordings/<m>/summary` | 读 `summary.md` 内容 + mtime |
 | **POST** | `/recordings/<m>/summary` | **LLM 生成纪要**：拼 transcript 全文调 LLM → 写 `summary.md`。返回 `{ok, text, transcript_lines, model}` |
+| **POST** | `/recordings/<m>/delete` | **永久删除整个会议目录**（mp4 + meeting.json + 字幕 + 纪要）。路径校验防穿越；若该会议正在录制返回 409 拒绝。返回 `{ok, meeting, size_mb}`。需 CSRF token，操作写审计日志 `action=delete_meeting` |
 
 #### transcript.json 返回格式
 

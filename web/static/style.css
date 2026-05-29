@@ -110,6 +110,19 @@ canvas    { background: #11141a; border-radius: 4px; }
 .btn-danger  { background: #dc2626; color: #fff; }
 .btn-danger:hover  { background: #b91c1c; }
 
+/* 录像列表行内删除按钮（描边红，hover 实心） */
+.btn-del {
+  padding: 3px 10px; font-size: 13px; cursor: pointer;
+  border: 1px solid #dc2626; border-radius: 4px;
+  background: #fff; color: #dc2626;
+}
+.btn-del:hover:not(:disabled) { background: #dc2626; color: #fff; }
+.btn-del:disabled { opacity: .5; cursor: not-allowed; }
+/* 回放页标题旁的删除按钮 */
+.meeting-title .btn-danger {
+  margin-left: 12px; font-size: 13px; padding: 4px 12px; vertical-align: middle;
+}
+
 .restart-form { margin-top: 28px; padding-top: 20px; border-top: 1px solid #e5e7eb;
                 display: flex; align-items: center; gap: 14px; }
 

@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily recorder recordings cleanup
+Documentation=https://github.com/kenliang0403/MeetingRecord
+
+[Timer]
+# 每天 03:00 跑一次；机器关机错过则开机后补跑一次
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

@@ -32,8 +32,13 @@
     "max_reconnects":    -1
   },
   "tcp": {
-    "bind_addr": "0.0.0.0",
+    "bind_addr": "127.0.0.1",
     "port":      9001
+  },
+  "cleanup": {
+    "_comment_":     "录像自动清理。enabled=true 时，recorder-cleanup.timer 每天按 retention_days 删除超期会议目录（按目录名 YYYYMMDD 前缀判断，不用 mtime）。默认关闭，需显式开启。",
+    "enabled":        false,
+    "retention_days": 180
   },
   "streaming": {
     "enabled":             true,

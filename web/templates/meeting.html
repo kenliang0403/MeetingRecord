@@ -2,11 +2,30 @@
 {% block title %}{{ meeting_dir }} — 回放{% endblock %}
 {% block body %}
 <p><a href="{{ url_for('recordings_page') }}">← 返回列表</a></p>
-<h2>{{ meeting_dir }}
+<h2 class="meeting-title">{{ meeting_dir }}
   {% if meeting_json and meeting_json.meeting_name %}
     <small>{{ meeting_json.meeting_name }}</small>
   {% endif %}
+  <button type="button" id="delete-meeting-btn" class="btn btn-danger"
+          data-dir="{{ meeting_dir }}" title="永久删除此会议的所有文件">删除此会议</button>
 </h2>
+<script>
+(function () {
+  var btn = document.getElementById('delete-meeting-btn');
+  if (!btn) return;
+  btn.addEventListener('click', function () {
+    var dir = btn.getAttribute('data-dir');
+    if (!confirm('确定永久删除会议「' + dir + '」？\n该会议的录像、字幕、纪要将全部删除，不可恢复。')) return;
+    btn.disabled = true; btn.textContent = '删除中…';
+    fetch('/recordings/' + encodeURIComponent(dir) + '/delete', {
+      method: 'POST', headers: window.csrfHeaders(),
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d.ok) { alert('已删除（释放 ' + d.size_mb + ' MB）'); location.href = '/recordings'; }
+      else { alert('删除失败：' + (d.error || '未知错误')); btn.disabled = false; btn.textContent = '删除此会议'; }
+    }).catch(function (e) { alert('请求失败：' + e); btn.disabled = false; btn.textContent = '删除此会议'; });
+  });
+})();
+</script>
 
 {% if not main_segments and not aux_segments %}
   <p class="muted">该会议目录下未发现 mp4 文件。</p>
