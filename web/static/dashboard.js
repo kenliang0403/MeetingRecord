@@ -68,6 +68,111 @@
   pollStatus();
   setInterval(pollStatus, 2000);
 
+  // ---- 服务器资源（CPU / 内存 / 磁盘）----
+  function fmtBytes(n) {
+    if (!n && n !== 0) return "—";
+    const u = ["B", "KB", "MB", "GB", "TB"];
+    let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return n.toFixed(i >= 3 ? 1 : 0) + " " + u[i];
+  }
+  function fmtUptime(s) {
+    if (!s) return "";
+    const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600),
+          m = Math.floor((s % 3600) / 60);
+    return "已运行 " + (d ? d + "天 " : "") + h + "时 " + m + "分";
+  }
+  function setBar(barId, numId, pct, text) {
+    const bar = el(barId), num = el(numId);
+    if (bar) {
+      const p = (pct == null) ? 0 : Math.max(0, Math.min(100, pct));
+      bar.style.width = p + "%";
+      bar.classList.toggle("res-warn", p >= 75 && p < 90);
+      bar.classList.toggle("res-crit", p >= 90);
+    }
+    if (num) num.textContent = text;
+  }
+  async function pollSystem() {
+    try {
+      const r = await fetch("/api/system", { cache: "no-store" });
+      const j = await r.json();
+      if (!j.ok) return;
+      const d = j.data;
+      // CPU
+      const cpuPct = d.cpu.pct;
+      setBar("sys-cpu-bar", "sys-cpu-num", cpuPct,
+             cpuPct == null ? "采样中…" : cpuPct + "%");
+      // 内存
+      setBar("sys-mem-bar", "sys-mem-num", d.mem.pct,
+             `${d.mem.pct}% (${fmtBytes(d.mem.used)}/${fmtBytes(d.mem.total)})`);
+      // 磁盘
+      setBar("sys-disk-bar", "sys-disk-num", d.disk.pct,
+             `${d.disk.pct}% (剩 ${fmtBytes(d.disk.free)})`);
+      // 负载 + uptime
+      const ld = el("sys-load");
+      if (ld) ld.textContent =
+        `负载 ${d.cpu.load1} / ${d.cpu.load5} / ${d.cpu.load15}（${d.cpu.ncpu} 核）`;
+      const up = el("sys-uptime");
+      if (up) up.textContent = fmtUptime(d.uptime_s);
+    } catch {}
+  }
+  pollSystem();
+  setInterval(pollSystem, 3000);
+
+  // ---- SRS 直播流状态 ----
+  async function pollSrs() {
+    try {
+      const r = await fetch("/api/srs", { cache: "no-store" });
+      const j = await r.json();
+      const streams = (j.data && j.data.streams) || [];
+      // 取 recorder-main（没有就取第一条）
+      const s = streams.find(x => /main/.test(x.name || "")) || streams[0];
+      const badge = el("srs-badge");
+      if (!s || !s.publish) {
+        if (badge) { badge.textContent = "无推流"; badge.className = "stream-badge badge-idle"; }
+        el("srs-publish").textContent = s ? "无（流存在但未推流）" : "无流";
+        el("srs-video").textContent = "—";
+        el("srs-audio").textContent = "—";
+        el("srs-kbps").textContent = "—";
+        el("srs-clients").textContent = s ? String(s.clients || 0) : "0";
+        return;
+      }
+      if (badge) { badge.textContent = "● 推流中"; badge.className = "stream-badge badge-active"; }
+      el("srs-publish").textContent = "● 活跃 (" + s.name + ")";
+      const v = s.video || {};
+      el("srs-video").textContent = (v.codec || "?") +
+        (v.w && v.h ? ` ${v.w}×${v.h}` : "") + (v.profile ? ` (${v.profile})` : "");
+      const a = s.audio || {};
+      el("srs-audio").textContent = (a.codec || "?") +
+        (a.sample_rate ? ` ${a.sample_rate}Hz` : "");
+      el("srs-kbps").textContent = `↓${s.recv_kbps || 0} / ↑${s.send_kbps || 0} kbps`;
+      el("srs-clients").textContent = String(s.clients || 0);
+    } catch {}
+  }
+  pollSrs();
+  setInterval(pollSrs, 3000);
+
+  // ---- 复制按钮 ----
+  document.querySelectorAll(".copy-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const target = el(btn.dataset.copy);
+      if (!target) return;
+      const text = target.textContent.trim();
+      try {
+        await navigator.clipboard.writeText(text);
+        const orig = btn.textContent;
+        btn.textContent = "✓ 已复制";
+        setTimeout(() => { btn.textContent = orig; }, 1500);
+      } catch {
+        // 降级：选中文本
+        const range = document.createRange();
+        range.selectNode(target);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+      }
+    });
+  });
+
   // ---- 启停按钮 ----
   const msgEl = document.getElementById('control-msg');
   const defaultMsg = msgEl ? msgEl.innerHTML : '';

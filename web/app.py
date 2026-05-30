@@ -65,6 +65,7 @@ SRS_HOST       = os.environ.get("SRS_HOST", "")  # 空字符串=用 request.host
 SRS_PORT       = int(os.environ.get("SRS_PORT", "8080"))
 MAIN_STREAM    = os.environ.get("STREAM_MAIN", "recorder-main")
 AUX_STREAM     = os.environ.get("STREAM_AUX",  "recorder-aux")
+RTMP_PORT      = int(os.environ.get("RTMP_PORT", "1935"))
 
 SESSION_TIMEOUT_MIN = int(os.environ.get("SESSION_TIMEOUT_MIN", "30"))
 
@@ -198,11 +199,16 @@ def logout():
 @app.route("/")
 @login_required
 def dashboard():
+    # RTMP 拉流地址（供 VLC/ffplay 等原生播放器监控；浏览器无法播 RTMP）。
+    # 用浏览器访问时的主机名，端口固定 1935。
+    rtmp_host = request.host.split(":")[0]
     return render_template(
         "dashboard.html",
         srs_base=srs_base_url(),
         main_stream=MAIN_STREAM,
         aux_stream=AUX_STREAM,
+        rtmp_main=f"rtmp://{rtmp_host}:{RTMP_PORT}/live/{MAIN_STREAM}",
+        flv_main=f"{srs_base_url()}/live/{MAIN_STREAM}.flv",
     )
 
 
@@ -1243,6 +1249,117 @@ def api_status():
 @login_required
 def api_levels():
     return jsonify(client.audio_levels())
+
+
+# ── 服务器资源状态（磁盘 / CPU / 内存 / 负载）──────────────────────────
+# 纯标准库实现，不引入 psutil（生产环境少一个依赖）。
+# 读 /proc/{stat,meminfo,uptime} + shutil.disk_usage + os.getloadavg。
+_prev_cpu = {"total": None, "idle": None}
+
+def _read_cpu_times():
+    """返回 (total_jiffies, idle_jiffies)；失败返回 (None, None)。"""
+    try:
+        with open("/proc/stat") as f:
+            for line in f:
+                if line.startswith("cpu "):
+                    p = [int(x) for x in line.split()[1:]]
+                    idle = p[3] + (p[4] if len(p) > 4 else 0)  # idle + iowait
+                    return sum(p), idle
+    except OSError:
+        pass
+    return None, None
+
+def _cpu_percent():
+    """两次采样间的 CPU 忙碌百分比；首次调用（无上次样本）返回 None。
+    样本缓存在模块级，每个 gunicorn worker 各自维护。"""
+    total, idle = _read_cpu_times()
+    if total is None:
+        return None
+    pt, pi = _prev_cpu["total"], _prev_cpu["idle"]
+    _prev_cpu["total"], _prev_cpu["idle"] = total, idle
+    if pt is None or total == pt:
+        return None
+    return round((1.0 - (idle - pi) / (total - pt)) * 100.0, 1)
+
+def _meminfo():
+    """返回 (total_bytes, used_bytes)；used = total - MemAvailable。"""
+    info = {}
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                k, _, v = line.partition(":")
+                if v:
+                    info[k.strip()] = int(v.split()[0]) * 1024  # kB → bytes
+    except OSError:
+        return 0, 0
+    total = info.get("MemTotal", 0)
+    avail = info.get("MemAvailable", info.get("MemFree", 0))
+    return total, max(0, total - avail)
+
+
+@app.route("/api/system")
+@login_required
+def api_system():
+    """服务器资源快照：磁盘（录像盘）/ 内存 / CPU / 负载 / 运行时长。"""
+    disk_path = RECORDINGS_DIR if os.path.isdir(RECORDINGS_DIR) else "/"
+    try:
+        du = shutil.disk_usage(disk_path)
+        disk = {"total": du.total, "used": du.used, "free": du.free,
+                "pct": round(du.used / du.total * 100, 1) if du.total else 0}
+    except OSError:
+        disk = {"total": 0, "used": 0, "free": 0, "pct": 0}
+    mem_total, mem_used = _meminfo()
+    try:
+        load1, load5, load15 = os.getloadavg()
+    except (OSError, AttributeError):
+        load1 = load5 = load15 = 0.0
+    try:
+        with open("/proc/uptime") as f:
+            uptime_s = int(float(f.read().split()[0]))
+    except (OSError, ValueError):
+        uptime_s = 0
+    return jsonify({"ok": True, "data": {
+        "disk": disk,
+        "mem":  {"total": mem_total, "used": mem_used,
+                 "pct": round(mem_used / mem_total * 100, 1) if mem_total else 0},
+        "cpu":  {"pct": _cpu_percent(), "ncpu": os.cpu_count() or 1,
+                 "load1": round(load1, 2), "load5": round(load5, 2),
+                 "load15": round(load15, 2)},
+        "uptime_s": uptime_s,
+        "disk_path": disk_path,
+    }})
+
+
+# ── SRS 直播流状态（代理 SRS HTTP API :1985，仅本机可达）────────────────
+SRS_API_PORT = int(os.environ.get("SRS_API_PORT", "1985"))
+
+@app.route("/api/srs")
+@login_required
+def api_srs():
+    """从 SRS 1985 API 拉当前流状态，精简后返回给前端。
+    1985 仅监听 127.0.0.1，浏览器不能直接访问，由 web 后端代理。"""
+    url = f"http://127.0.0.1:{SRS_API_PORT}/api/v1/streams/"
+    try:
+        with urllib.request.urlopen(url, timeout=3) as r:
+            data = json.loads(r.read().decode("utf-8"))
+    except Exception as e:  # noqa: BLE001  — SRS 没起/无流都算"无数据"
+        return jsonify({"ok": False, "error": str(e), "data": {"streams": []}})
+    streams = []
+    for s in data.get("streams", []):
+        v = s.get("video") or {}
+        a = s.get("audio") or {}
+        kbps = s.get("kbps") or {}
+        streams.append({
+            "name":     s.get("name"),
+            "clients":  s.get("clients", 0),
+            "publish":  bool((s.get("publish") or {}).get("active", False)),
+            "video":    {"codec": v.get("codec"), "w": v.get("width"),
+                         "h": v.get("height"), "profile": v.get("profile")},
+            "audio":    {"codec": a.get("codec"), "sample_rate": a.get("sample_rate")},
+            "recv_kbps": kbps.get("recv_30s", 0),
+            "send_kbps": kbps.get("send_30s", 0),
+        })
+    return jsonify({"ok": True, "data": {"streams": streams}})
 
 
 @app.route("/api/config")

@@ -3,15 +3,59 @@
 {% block body %}
 <h2>实时状态</h2>
 
-<div class="card">
-  <h3>设备</h3>
-  <table id="status-tbl"><tbody>
-    <tr><th>注册</th><td id="s-reg">…</td></tr>
-    <tr><th>Alias</th><td id="s-alias">…</td></tr>
-    <tr><th>GK</th><td id="s-gk">…</td></tr>
-    <tr><th>通话中</th><td id="s-incall">…</td></tr>
-    <tr><th>会议</th><td id="s-meeting">…</td></tr>
+<div class="status-cols">
+  <div class="card">
+    <h3>设备</h3>
+    <table id="status-tbl"><tbody>
+      <tr><th>注册</th><td id="s-reg">…</td></tr>
+      <tr><th>Alias</th><td id="s-alias">…</td></tr>
+      <tr><th>GK</th><td id="s-gk">…</td></tr>
+      <tr><th>通话中</th><td id="s-incall">…</td></tr>
+      <tr><th>会议</th><td id="s-meeting">…</td></tr>
+    </tbody></table>
+  </div>
+
+  <div class="card">
+    <h3>服务器资源 <span class="muted" id="sys-uptime" style="font-size:12px;font-weight:normal;"></span></h3>
+    <div class="res-row">
+      <span class="res-label">CPU</span>
+      <div class="res-bar"><div class="res-fill" id="sys-cpu-bar"></div></div>
+      <span class="res-num" id="sys-cpu-num">…</span>
+    </div>
+    <div class="res-row">
+      <span class="res-label">内存</span>
+      <div class="res-bar"><div class="res-fill" id="sys-mem-bar"></div></div>
+      <span class="res-num" id="sys-mem-num">…</span>
+    </div>
+    <div class="res-row">
+      <span class="res-label">磁盘</span>
+      <div class="res-bar"><div class="res-fill" id="sys-disk-bar"></div></div>
+      <span class="res-num" id="sys-disk-num">…</span>
+    </div>
+    <div class="muted" style="font-size:11px;margin-top:6px;" id="sys-load">负载 …</div>
+  </div>
+</div>
+
+<div class="card mt">
+  <h3>SRS 直播流 <span class="stream-badge" id="srs-badge" style="font-size:11px;">…</span></h3>
+  <table class="kv-tbl"><tbody>
+    <tr><th>推流</th><td id="srs-publish">…</td></tr>
+    <tr><th>视频</th><td id="srs-video">…</td></tr>
+    <tr><th>音频</th><td id="srs-audio">…</td></tr>
+    <tr><th>码率</th><td id="srs-kbps">…</td></tr>
+    <tr><th>拉流客户端</th><td id="srs-clients">…</td></tr>
   </tbody></table>
+  <div class="muted" style="font-size:12px;margin-top:8px;">
+    监控拉流地址（复制到 VLC / ffplay；浏览器不能直接播 RTMP）：
+  </div>
+  <div class="copy-row">
+    <code id="url-rtmp">{{ rtmp_main }}</code>
+    <button type="button" class="btn btn-link copy-btn" data-copy="url-rtmp">复制</button>
+  </div>
+  <div class="copy-row">
+    <code id="url-flv">{{ flv_main }}</code>
+    <button type="button" class="btn btn-link copy-btn" data-copy="url-flv">复制</button>
+  </div>
 </div>
 
 <h3 class="mt section-h">接收（来自 MCU，已转推 SRS）</h3>

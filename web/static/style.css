@@ -71,6 +71,39 @@ small { color: #888; font-weight: 400; }
 .vu-foot  { text-align: center; color: #888; font-size: 12px; margin-top: 6px; }
 canvas    { background: #11141a; border-radius: 4px; }
 
+/* ── 状态页：设备 + 服务器资源 双列 ───────────────────────────── */
+.status-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 760px) { .status-cols { grid-template-columns: 1fr; } }
+
+/* 资源条（CPU / 内存 / 磁盘）*/
+.res-row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.res-label { width: 38px; color: #6b7280; font-size: 13px; flex: none; }
+.res-bar {
+  flex: 1; height: 14px; background: #eef0f3; border-radius: 7px; overflow: hidden;
+}
+.res-fill {
+  height: 100%; width: 0; background: #22c55e; border-radius: 7px;
+  transition: width .4s ease, background .3s;
+}
+.res-fill.res-warn { background: #f59e0b; }
+.res-fill.res-crit { background: #ef4444; }
+.res-num { width: 168px; text-align: right; font-size: 12px;
+  color: #374151; font-family: ui-monospace, monospace; flex: none; }
+
+/* key-value 小表（SRS 流状态）*/
+.kv-tbl { width: 100%; border-collapse: collapse; }
+.kv-tbl th, .kv-tbl td { padding: 5px 8px; text-align: left; font-size: 13px;
+  border-bottom: 1px solid #f1f3f5; }
+.kv-tbl th { color: #6b7280; font-weight: 500; width: 96px; }
+
+/* 拉流地址复制行 */
+.copy-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.copy-row code {
+  flex: 1; background: #1f2937; color: #e5e7eb; padding: 6px 10px;
+  border-radius: 4px; font-size: 12px; overflow-x: auto; white-space: nowrap;
+}
+.copy-btn { flex: none; }
+
 .player-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 @media (max-width: 800px) { .player-grid { grid-template-columns: 1fr; } }
 .player-grid video { width: 100%; max-height: 360px; background: #000; border-radius: 4px; }
