@@ -174,9 +174,11 @@
         pill.className = "svc-pill " + svcClass(s.state);
         pill.innerHTML =
           `<span class="svc-dot"></span>` +
-          `<span class="svc-name">${s.label}</span>` +
-          `<span class="svc-state">${svcText(s.state)}</span>` +
-          `<span class="svc-unit">${s.unit}</span>`;
+          `<div class="svc-info">` +
+            `<span class="svc-name">${s.label}</span>` +
+            `<span class="svc-unit">${s.unit}</span>` +
+          `</div>` +
+          `<span class="svc-state">${svcText(s.state)}</span>`;
         grid.appendChild(pill);
       });
     } catch {}
