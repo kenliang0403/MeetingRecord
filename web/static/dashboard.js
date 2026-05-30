@@ -152,6 +152,38 @@
   pollSrs();
   setInterval(pollSrs, 3000);
 
+  // ---- 6 个服务状态 ----
+  function svcClass(state) {
+    if (state === "active") return "svc-ok";
+    if (state === "activating" || state === "reloading") return "svc-warn";
+    return "svc-bad";   // inactive / failed / unknown / error
+  }
+  function svcText(state) {
+    return ({ active: "运行中", inactive: "已停止", failed: "失败",
+              activating: "启动中", reloading: "重载中" })[state] || state;
+  }
+  async function pollServices() {
+    try {
+      const r = await fetch("/api/services", { cache: "no-store" });
+      const j = await r.json();
+      const grid = el("svc-grid");
+      if (!j.ok || !grid) return;
+      grid.innerHTML = "";
+      (j.data.services || []).forEach(s => {
+        const pill = document.createElement("div");
+        pill.className = "svc-pill " + svcClass(s.state);
+        pill.innerHTML =
+          `<span class="svc-dot"></span>` +
+          `<span class="svc-name">${s.label}</span>` +
+          `<span class="svc-state">${svcText(s.state)}</span>` +
+          `<span class="svc-unit">${s.unit}</span>`;
+        grid.appendChild(pill);
+      });
+    } catch {}
+  }
+  pollServices();
+  setInterval(pollServices, 5000);
+
   // ---- 复制按钮 ----
   document.querySelectorAll(".copy-btn").forEach(btn => {
     btn.addEventListener("click", async () => {

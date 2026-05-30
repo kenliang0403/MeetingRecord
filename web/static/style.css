@@ -103,6 +103,36 @@ canvas    { background: #11141a; border-radius: 4px; }
   border-radius: 4px; font-size: 12px; overflow-x: auto; white-space: nowrap;
 }
 .copy-btn { flex: none; }
+.addr-block { margin-top: 12px; }
+.addr-title { font-size: 13px; color: #374151; font-weight: 500; margin-bottom: 4px; }
+.addr-tag {
+  flex: none; width: 42px; text-align: center; font-size: 11px; font-weight: 600;
+  color: #2563eb; background: #eff6ff; border-radius: 4px; padding: 4px 0;
+}
+
+/* 6 服务状态 pills */
+.svc-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+}
+@media (max-width: 760px) { .svc-grid { grid-template-columns: repeat(2, 1fr); } }
+.svc-pill {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-radius: 8px; background: #f9fafb;
+  border: 1px solid #eef0f3;
+}
+.svc-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: #9ca3af; }
+.svc-ok   .svc-dot { background: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,.15); }
+.svc-warn .svc-dot { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,.15); }
+.svc-bad  .svc-dot { background: #ef4444; box-shadow: 0 0 0 3px rgba(239,68,68,.15); }
+.svc-name  { font-size: 13px; color: #1f2937; font-weight: 500; }
+.svc-state { font-size: 12px; margin-left: auto; }
+.svc-ok   .svc-state { color: #16a34a; }
+.svc-warn .svc-state { color: #d97706; }
+.svc-bad  .svc-state { color: #dc2626; }
+.svc-unit {
+  width: 100%; font-size: 10px; color: #9ca3af; flex-basis: 100%;
+  font-family: ui-monospace, monospace;
+}
 
 .player-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 @media (max-width: 800px) { .player-grid { grid-template-columns: 1fr; } }

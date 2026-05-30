@@ -37,6 +37,13 @@
 </div>
 
 <div class="card mt">
+  <h3>服务状态</h3>
+  <div class="svc-grid" id="svc-grid">
+    <span class="muted">加载中…</span>
+  </div>
+</div>
+
+<div class="card mt">
   <h3>SRS 直播流 <span class="stream-badge" id="srs-badge" style="font-size:11px;">…</span></h3>
   <table class="kv-tbl"><tbody>
     <tr><th>推流</th><td id="srs-publish">…</td></tr>
@@ -45,16 +52,23 @@
     <tr><th>码率</th><td id="srs-kbps">…</td></tr>
     <tr><th>拉流客户端</th><td id="srs-clients">…</td></tr>
   </tbody></table>
-  <div class="muted" style="font-size:12px;margin-top:8px;">
-    监控拉流地址（复制到 VLC / ffplay；浏览器不能直接播 RTMP）：
+
+  <div class="addr-block">
+    <div class="addr-title">主流（recorder-main）</div>
+    <div class="copy-row"><span class="addr-tag">HLS</span><code id="u-main-hls">{{ url_main.hls }}</code><button type="button" class="btn btn-link copy-btn" data-copy="u-main-hls">复制</button></div>
+    <div class="copy-row"><span class="addr-tag">FLV</span><code id="u-main-flv">{{ url_main.flv }}</code><button type="button" class="btn btn-link copy-btn" data-copy="u-main-flv">复制</button></div>
+    <div class="copy-row"><span class="addr-tag">RTMP</span><code id="u-main-rtmp">{{ url_main.rtmp }}</code><button type="button" class="btn btn-link copy-btn" data-copy="u-main-rtmp">复制</button></div>
   </div>
-  <div class="copy-row">
-    <code id="url-rtmp">{{ rtmp_main }}</code>
-    <button type="button" class="btn btn-link copy-btn" data-copy="url-rtmp">复制</button>
+
+  <div class="addr-block">
+    <div class="addr-title">辅流 / 演示（recorder-aux）</div>
+    <div class="copy-row"><span class="addr-tag">HLS</span><code id="u-aux-hls">{{ url_aux.hls }}</code><button type="button" class="btn btn-link copy-btn" data-copy="u-aux-hls">复制</button></div>
+    <div class="copy-row"><span class="addr-tag">FLV</span><code id="u-aux-flv">{{ url_aux.flv }}</code><button type="button" class="btn btn-link copy-btn" data-copy="u-aux-flv">复制</button></div>
+    <div class="copy-row"><span class="addr-tag">RTMP</span><code id="u-aux-rtmp">{{ url_aux.rtmp }}</code><button type="button" class="btn btn-link copy-btn" data-copy="u-aux-rtmp">复制</button></div>
   </div>
-  <div class="copy-row">
-    <code id="url-flv">{{ flv_main }}</code>
-    <button type="button" class="btn btn-link copy-btn" data-copy="url-flv">复制</button>
+
+  <div class="muted" style="font-size:11px;margin-top:8px;">
+    HLS = <a href="{{ url_for('live_page') }}">直播页</a>浏览器播放用；FLV = 低延迟；RTMP = VLC/ffplay/转推（浏览器不能直接播 RTMP）。
   </div>
 </div>
 

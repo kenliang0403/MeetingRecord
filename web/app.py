@@ -32,6 +32,7 @@ API (login required):
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -199,16 +200,23 @@ def logout():
 @app.route("/")
 @login_required
 def dashboard():
-    # RTMP 拉流地址（供 VLC/ffplay 等原生播放器监控；浏览器无法播 RTMP）。
-    # 用浏览器访问时的主机名，端口固定 1935。
-    rtmp_host = request.host.split(":")[0]
+    # 全部 SRS 直播地址（主流 + 辅流 × HLS/FLV/RTMP）。
+    # HLS = /live 页浏览器播放用；FLV = 低延迟浏览器/播放器；RTMP = VLC/ffplay/转推。
+    base = srs_base_url()                       # http(s)://host[:port][/srs]
+    rtmp_host = request.host.split(":")[0]      # RTMP 用裸主机名 + 1935
+    def urls(stream):
+        return {
+            "hls":  f"{base}/live/{stream}.m3u8",
+            "flv":  f"{base}/live/{stream}.flv",
+            "rtmp": f"rtmp://{rtmp_host}:{RTMP_PORT}/live/{stream}",
+        }
     return render_template(
         "dashboard.html",
-        srs_base=srs_base_url(),
+        srs_base=base,
         main_stream=MAIN_STREAM,
         aux_stream=AUX_STREAM,
-        rtmp_main=f"rtmp://{rtmp_host}:{RTMP_PORT}/live/{MAIN_STREAM}",
-        flv_main=f"{srs_base_url()}/live/{MAIN_STREAM}.flv",
+        url_main=urls(MAIN_STREAM),
+        url_aux=urls(AUX_STREAM),
     )
 
 
@@ -1360,6 +1368,36 @@ def api_srs():
             "send_kbps": kbps.get("send_30s", 0),
         })
     return jsonify({"ok": True, "data": {"streams": streams}})
+
+
+# ── 6 个服务的存活状态 ────────────────────────────────────────────────
+# systemctl is-active 普通用户即可查询，无需 sudo。固定白名单，无用户输入。
+_MONITORED_SERVICES = [
+    ("recorder-core",        "录播核心"),
+    ("recorder-web",         "Web 管理"),
+    ("recorder-asr",         "语音识别"),
+    ("recorder-asr-bridge",  "字幕桥"),
+    ("srs",                  "流媒体"),
+    ("nginx",                "反向代理"),
+]
+
+@app.route("/api/services")
+@login_required
+def api_services():
+    units = [u for u, _ in _MONITORED_SERVICES]
+    states = {}
+    try:
+        # 一次性查全部：systemctl is-active a b c → 每行一个状态，顺序对应
+        r = subprocess.run(["systemctl", "is-active"] + units,
+                           capture_output=True, text=True, timeout=5)
+        lines = r.stdout.strip().split("\n")
+        for u, st in zip(units, lines):
+            states[u] = st.strip() or "unknown"
+    except Exception:  # noqa: BLE001
+        pass
+    out = [{"unit": u, "label": label, "state": states.get(u, "error")}
+           for u, label in _MONITORED_SERVICES]
+    return jsonify({"ok": True, "data": {"services": out}})
 
 
 @app.route("/api/config")
