@@ -216,9 +216,9 @@
   //   字幕延迟 + 应用按钮 —— 改完点【应用】才生效（避免边输入边跳）
   const captionEl = document.getElementById('live-caption');
   if (captionEl && typeof EventSource !== 'undefined') {
-    const LS_ENABLED = 'liveCaptionEnabled';
+    const LS_ENABLED = 'liveCaptionEnabled_v2';   // v2: 默认关闭（旧键作废）
     const LS_DELAY   = 'liveCaptionDelay';
-    let captionsEnabled = true;
+    let captionsEnabled = false;                  // 默认不显示字幕，可在 UI 手动开
     let captionDelaySec = 4.0;
     try {
       const e = localStorage.getItem(LS_ENABLED);

@@ -294,9 +294,9 @@
     // --- 字幕开关 + 偏移（localStorage 持久化）--------------------
     // captionOffset > 0 把"当前时刻"视为已经过去了 N 秒，等于字幕提前 N 秒
     // 出现；负数则推后。用 number input + change/input 即时生效。
-    const LS_ENABLED = 'replayCaptionEnabled';
+    const LS_ENABLED = 'replayCaptionEnabled_v2';   // v2: 默认关闭（旧键作废）
     const LS_OFFSET  = 'replayCaptionOffset';
-    let captionsEnabled = true;
+    let captionsEnabled = false;                    // 默认不显示字幕，可在 UI 手动开
     let captionOffset   = 0;
     try {
       const v = localStorage.getItem(LS_ENABLED);
